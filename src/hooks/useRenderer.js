@@ -7,8 +7,14 @@ export function useRenderer({ canvasRef, layers, transform, drawing }) {
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
 
+    // 保存上下文状态
+    ctx.save();
+    
+    // 重置变换并清除画布
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 设置缩放和变换
     ctx.scale(dpr, dpr);
     ctx.translate(transform.x, transform.y);
     ctx.scale(transform.scale, transform.scale);

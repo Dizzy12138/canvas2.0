@@ -51,6 +51,14 @@ export function useLayers(initialLayers = []) {
     );
   }, []);
 
+  const toggleLayerLock = useCallback((layerId) => {
+    setLayers(prev =>
+      prev.map(layer =>
+        layer.id === layerId ? { ...layer, locked: !layer.locked } : layer
+      )
+    );
+  }, []);
+
   return {
     layers,
     activeLayerId,
@@ -60,6 +68,7 @@ export function useLayers(initialLayers = []) {
     addLayer,
     deleteLayer,
     toggleLayerVisibility,
+    toggleLayerLock,
     updateLayer
   };
 }
