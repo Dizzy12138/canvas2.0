@@ -88,7 +88,7 @@ const FabricCanvas = forwardRef(({
     
     // 调试canvas初始化
     CanvasDebugger.debugCanvas(canvas, 'Initial canvas creation');
-    
+
     // 等待canvas完全初始化
     const initializationTimeouts = [
       setTimeout(() => {
@@ -101,11 +101,43 @@ const FabricCanvas = forwardRef(({
         onCanvasReady?.(canvas);
       }, 100)
     ];
-    
+
+    const panState = {
+      x: canvas.viewportTransform?.[4] || 0,
+      y: canvas.viewportTransform?.[5] || 0
+    };
+
+    const updatePanState = () => {
+      const viewportTransform = canvas.viewportTransform;
+      if (!viewportTransform) return;
+
+      const nextX = viewportTransform[4] || 0;
+      const nextY = viewportTransform[5] || 0;
+
+      if (nextX !== panState.x || nextY !== panState.y) {
+        panState.x = nextX;
+        panState.y = nextY;
+        setCanvasPan({ x: nextX, y: nextY });
+      }
+    };
+
     // 清理超时器
     const cleanup = () => {
       initializationTimeouts.forEach(timer => clearTimeout(timer));
     };
+
+    const handleBeforeRender = () => {
+      updatePanState();
+    };
+
+    const handleCanvasPanned = () => {
+      updatePanState();
+    };
+
+    canvas.on('before:render', handleBeforeRender);
+    canvas.on('canvas:panned', handleCanvasPanned);
+
+    updatePanState();
 
     // 事件监听
     canvas.on('path:created', (e) => {
@@ -144,17 +176,20 @@ const FabricCanvas = forwardRef(({
       const delta = opt.e.deltaY;
       let zoom = canvas.getZoom();
       zoom *= 0.999 ** delta;
-      
+
       // 限制缩放范围
       if (zoom > 20) zoom = 20;
       if (zoom < 0.01) zoom = 0.01;
-      
+
       // 以鼠标位置为中心缩放
       canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
-      
+
+      canvas.requestRenderAll();
+      canvas.fire('canvas:panned');
+
       // 更新缩放状态
       setCanvasScale(zoom);
-      
+
       opt.e.preventDefault();
       opt.e.stopPropagation();
     });
@@ -174,6 +209,8 @@ const FabricCanvas = forwardRef(({
       if (snapSystemRef.current) {
         snapSystemRef.current.destroy();
       }
+      canvas.off('before:render', handleBeforeRender);
+      canvas.off('canvas:panned', handleCanvasPanned);
       canvas.dispose();
     };
   }, [width, height]);
@@ -589,42 +626,49 @@ const FabricCanvas = forwardRef(({
   const setupCanvasPanning = useCallback((canvas) => {
     let isDragging = false;
     let lastPosX, lastPosY;
+    const previousSelectableState = new Map();
 
     const onMouseDown = (o) => {
       if (activeTool !== 'hand') return;
-      
+
+      const pointer = canvas.getPointer(o.e);
+      if (!pointer) {
+        return;
+      }
+
       isDragging = true;
       canvas.defaultCursor = 'grabbing';
-      
-      const pointer = canvas.getPointer(o.e);
+
       lastPosX = pointer.x;
       lastPosY = pointer.y;
       
       // 禁用对象选择
       canvas.selection = false;
+      previousSelectableState.clear();
       canvas.getObjects().forEach(obj => {
+        previousSelectableState.set(obj, obj.selectable);
         obj.selectable = false;
       });
     };
 
     const onMouseMove = (o) => {
       if (!isDragging) return;
-      
+
       const pointer = canvas.getPointer(o.e);
+      if (!pointer) {
+        return;
+      }
       const deltaX = pointer.x - lastPosX;
       const deltaY = pointer.y - lastPosY;
-      
-      // 移动所有对象
-      canvas.getObjects().forEach(obj => {
-        obj.left += deltaX;
-        obj.top += deltaY;
-        obj.setCoords();
-      });
-      
+
+      if (deltaX !== 0 || deltaY !== 0) {
+        canvas.relativePan(new fabric.Point(deltaX, deltaY));
+        canvas.requestRenderAll();
+        canvas.fire('canvas:panned');
+      }
+
       lastPosX = pointer.x;
       lastPosY = pointer.y;
-      
-      canvas.renderAll();
     };
 
     const onMouseUp = () => {
@@ -635,8 +679,10 @@ const FabricCanvas = forwardRef(({
       
       // 恢复对象可选择性
       canvas.getObjects().forEach(obj => {
-        obj.selectable = true;
+        const previous = previousSelectableState.get(obj);
+        obj.selectable = typeof previous === 'boolean' ? previous : true;
       });
+      previousSelectableState.clear();
     };
 
     canvas.on('mouse:down', onMouseDown);
