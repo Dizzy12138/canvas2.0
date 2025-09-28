@@ -14,9 +14,7 @@ const AICanvasToolFabric = () => {
   const fabricCanvasRef = useRef(null);
   const containerRef = useRef(null);
 
-  console.log('AICanvasToolFabric component rendered');
-
-  const { 
+  const {
     layers, 
     activeLayerId, 
     setLayers, 

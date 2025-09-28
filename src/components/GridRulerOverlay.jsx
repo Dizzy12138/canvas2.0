@@ -1,100 +1,115 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 
-const GridRulerOverlay = ({ 
-  width, 
-  height, 
-  showGrid = false, 
+const clampNumber = (value, fallback = 0) =>
+  Number.isFinite(value) ? value : fallback;
+
+export const computeGridBackgroundStyle = ({
+  showGrid,
+  width,
+  height,
+  gridSize,
+  gridOpacity,
+  scale,
+  panX,
+  panY
+}) => {
+  if (!showGrid || width <= 0 || height <= 0) {
+    return { display: 'none' };
+  }
+
+  const safeScale = Math.max(clampNumber(scale, 1), 0.01);
+  const baseGridSize = Math.max(1, Math.abs(clampNumber(gridSize, 20)) * safeScale);
+  const majorGridSize = baseGridSize * 5;
+
+  const scaledPanX = clampNumber(panX) * safeScale;
+  const scaledPanY = clampNumber(panY) * safeScale;
+
+  const offsetX = ((scaledPanX % baseGridSize) + baseGridSize) % baseGridSize;
+  const offsetY = ((scaledPanY % baseGridSize) + baseGridSize) % baseGridSize;
+  const majorOffsetX = ((scaledPanX % majorGridSize) + majorGridSize) % majorGridSize;
+  const majorOffsetY = ((scaledPanY % majorGridSize) + majorGridSize) % majorGridSize;
+
+  const minorOpacity = Math.min(Math.max(gridOpacity, 0.05), 1);
+  const majorOpacity = Math.min(minorOpacity * 1.6, 1);
+
+  const minorColor = `rgba(0, 0, 0, ${minorOpacity})`;
+  const majorColor = `rgba(0, 0, 0, ${majorOpacity})`;
+
+  const gridImage = (direction, color, step) =>
+    `repeating-linear-gradient(${direction}, ${color} 0px, ${color} 1px, transparent 1px, transparent ${step}px)`;
+
+  return {
+    backgroundImage: [
+      gridImage('to right', minorColor, baseGridSize),
+      gridImage('to bottom', minorColor, baseGridSize),
+      gridImage('to right', majorColor, majorGridSize),
+      gridImage('to bottom', majorColor, majorGridSize)
+    ].join(','),
+    backgroundSize: `${baseGridSize}px ${baseGridSize}px, ${baseGridSize}px ${baseGridSize}px, ${majorGridSize}px ${majorGridSize}px, ${majorGridSize}px ${majorGridSize}px`,
+    backgroundPosition: `${-offsetX}px 0px, 0px ${-offsetY}px, ${-majorOffsetX}px 0px, 0px ${-majorOffsetY}px`,
+    backgroundRepeat: 'repeat',
+    backgroundColor: 'transparent',
+    willChange: 'background-position'
+  };
+};
+
+const GridRulerOverlay = ({
+  width,
+  height,
+  showGrid = false,
   showRuler = false,
   gridSize = 20,
   gridOpacity = 0.1,
   rulerThickness = 20,
   scale = 1,
   pan = { x: 0, y: 0 },
-  className 
+  className
 }) => {
-  const canvasRef = useRef(null);
+  const rulerCanvasRef = useRef(null);
+  const panX = clampNumber(pan?.x);
+  const panY = clampNumber(pan?.y);
+  const canvasWidth = clampNumber(width, 0);
+  const canvasHeight = clampNumber(height, 0);
+
+  const gridBackgroundStyle = useMemo(() =>
+    computeGridBackgroundStyle({
+      showGrid,
+      width: canvasWidth,
+      height: canvasHeight,
+      gridSize,
+      gridOpacity,
+      scale,
+      panX,
+      panY
+    }),
+  [showGrid, canvasWidth, canvasHeight, gridSize, gridOpacity, scale, panX, panY]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = rulerCanvasRef.current;
     if (!canvas) return;
 
+    if (!showRuler || canvasWidth <= 0 || canvasHeight <= 0) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      return;
+    }
+
     const ctx = canvas.getContext('2d');
-    
-    // 设置高DPI支持
+    if (!ctx) return;
+
     const devicePixelRatio = window.devicePixelRatio || 1;
-    canvas.width = width * devicePixelRatio;
-    canvas.height = height * devicePixelRatio;
-    canvas.style.width = width + 'px';
-    canvas.style.height = height + 'px';
-    ctx.scale(devicePixelRatio, devicePixelRatio);
+    canvas.width = canvasWidth * devicePixelRatio;
+    canvas.height = canvasHeight * devicePixelRatio;
+    canvas.style.width = `${canvasWidth}px`;
+    canvas.style.height = `${canvasHeight}px`;
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
 
-    // 清除画布
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-    // 绘制网格
-    if (showGrid) {
-      drawGrid(ctx, width, height, gridSize, gridOpacity, scale, pan);
-    }
-
-    // 绘制标尺
-    if (showRuler) {
-      drawRuler(ctx, width, height, rulerThickness, scale, pan);
-    }
-
-  }, [width, height, showGrid, showRuler, gridSize, gridOpacity, rulerThickness, scale, pan]);
-
-  const drawGrid = (ctx, canvasWidth, canvasHeight, size, opacity, currentScale, currentPan) => {
-    ctx.save();
-    
-    // 设置网格样式
-    ctx.strokeStyle = `rgba(0, 0, 0, ${opacity})`;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([]);
-
-    const effectiveGridSize = size * currentScale;
-    const offsetX = (currentPan.x % effectiveGridSize + effectiveGridSize) % effectiveGridSize;
-    const offsetY = (currentPan.y % effectiveGridSize + effectiveGridSize) % effectiveGridSize;
-
-    // 绘制垂直线
-    ctx.beginPath();
-    for (let x = offsetX; x <= canvasWidth; x += effectiveGridSize) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvasHeight);
-    }
-    ctx.stroke();
-
-    // 绘制水平线
-    ctx.beginPath();
-    for (let y = offsetY; y <= canvasHeight; y += effectiveGridSize) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvasWidth, y);
-    }
-    ctx.stroke();
-
-    // 绘制主网格线（每5个网格一条粗线）
-    ctx.strokeStyle = `rgba(0, 0, 0, ${opacity * 2})`;
-    ctx.lineWidth = 1.5;
-    
-    const majorGridSize = effectiveGridSize * 5;
-    const majorOffsetX = (currentPan.x % majorGridSize + majorGridSize) % majorGridSize;
-    const majorOffsetY = (currentPan.y % majorGridSize + majorGridSize) % majorGridSize;
-
-    ctx.beginPath();
-    for (let x = majorOffsetX; x <= canvasWidth; x += majorGridSize) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvasHeight);
-    }
-    ctx.stroke();
-
-    ctx.beginPath();
-    for (let y = majorOffsetY; y <= canvasHeight; y += majorGridSize) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvasWidth, y);
-    }
-    ctx.stroke();
-
-    ctx.restore();
-  };
+    drawRuler(ctx, canvasWidth, canvasHeight, rulerThickness, scale, { x: panX, y: panY });
+  }, [canvasWidth, canvasHeight, showRuler, rulerThickness, scale, panX, panY]);
 
   const drawRuler = (ctx, canvasWidth, canvasHeight, thickness, currentScale, currentPan) => {
     ctx.save();
@@ -215,12 +230,32 @@ const GridRulerOverlay = ({
     ctx.restore();
   };
 
+  if (!showGrid && !showRuler) {
+    return null;
+  }
+
   return (
-    <canvas
-      ref={canvasRef}
+    <div
       className={`absolute top-0 left-0 pointer-events-none z-10 ${className || ''}`}
-      style={{ width, height }}
-    />
+      style={{ width: canvasWidth, height: canvasHeight }}
+      data-testid="grid-ruler-overlay"
+    >
+      {showGrid && (
+        <div
+          className="absolute inset-0"
+          style={gridBackgroundStyle}
+          data-testid="grid-ruler-overlay-grid"
+        />
+      )}
+      {showRuler && (
+        <canvas
+          ref={rulerCanvasRef}
+          className="absolute top-0 left-0"
+          style={{ width: canvasWidth, height: canvasHeight }}
+          data-testid="grid-ruler-overlay-ruler"
+        />
+      )}
+    </div>
   );
 };
 
