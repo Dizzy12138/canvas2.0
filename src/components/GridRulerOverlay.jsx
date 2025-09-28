@@ -1,100 +1,76 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 
-const GridRulerOverlay = ({ 
-  width, 
-  height, 
-  showGrid = false, 
+const GridRulerOverlay = ({
+  width,
+  height,
+  showGrid = false,
   showRuler = false,
   gridSize = 20,
   gridOpacity = 0.1,
   rulerThickness = 20,
   scale = 1,
   pan = { x: 0, y: 0 },
-  className 
+  className
 }) => {
-  const canvasRef = useRef(null);
+  const rulerCanvasRef = useRef(null);
+  const panX = typeof pan?.x === 'number' ? pan.x : 0;
+  const panY = typeof pan?.y === 'number' ? pan.y : 0;
+
+  const gridBackgroundStyle = useMemo(() => {
+    if (!showGrid || width <= 0 || height <= 0) {
+      return { display: 'none' };
+    }
+
+    const safeScale = Math.max(scale, 0.01);
+    const minorStep = Math.max(1, gridSize * safeScale);
+    const majorStep = minorStep * 5;
+
+    const offsetX = ((panX % minorStep) + minorStep) % minorStep;
+    const offsetY = ((panY % minorStep) + minorStep) % minorStep;
+    const majorOffsetX = ((panX % majorStep) + majorStep) % majorStep;
+    const majorOffsetY = ((panY % majorStep) + majorStep) % majorStep;
+
+    const minorColor = `rgba(0, 0, 0, ${Math.min(gridOpacity, 1)})`;
+    const majorColor = `rgba(0, 0, 0, ${Math.min(gridOpacity * 2, 1)})`;
+
+    return {
+      backgroundImage: [
+        `linear-gradient(to right, ${minorColor} 0, ${minorColor} 1px, transparent 1px, transparent 100%)`,
+        `linear-gradient(to bottom, ${minorColor} 0, ${minorColor} 1px, transparent 1px, transparent 100%)`,
+        `linear-gradient(to right, ${majorColor} 0, ${majorColor} 1px, transparent 1px, transparent 100%)`,
+        `linear-gradient(to bottom, ${majorColor} 0, ${majorColor} 1px, transparent 1px, transparent 100%)`
+      ].join(','),
+      backgroundSize: `${minorStep}px ${minorStep}px, ${minorStep}px ${minorStep}px, ${majorStep}px ${majorStep}px, ${majorStep}px ${majorStep}px`,
+      backgroundPosition: `${offsetX}px 0px, 0px ${offsetY}px, ${majorOffsetX}px 0px, 0px ${majorOffsetY}px`
+    };
+  }, [showGrid, width, height, gridSize, gridOpacity, scale, panX, panY]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = rulerCanvasRef.current;
     if (!canvas) return;
 
+    if (!showRuler) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      return;
+    }
+
     const ctx = canvas.getContext('2d');
-    
-    // 设置高DPI支持
+    if (!ctx) return;
+
     const devicePixelRatio = window.devicePixelRatio || 1;
     canvas.width = width * devicePixelRatio;
     canvas.height = height * devicePixelRatio;
     canvas.style.width = width + 'px';
     canvas.style.height = height + 'px';
-    ctx.scale(devicePixelRatio, devicePixelRatio);
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
 
-    // 清除画布
     ctx.clearRect(0, 0, width, height);
 
-    // 绘制网格
-    if (showGrid) {
-      drawGrid(ctx, width, height, gridSize, gridOpacity, scale, pan);
-    }
-
-    // 绘制标尺
-    if (showRuler) {
-      drawRuler(ctx, width, height, rulerThickness, scale, pan);
-    }
-
-  }, [width, height, showGrid, showRuler, gridSize, gridOpacity, rulerThickness, scale, pan]);
-
-  const drawGrid = (ctx, canvasWidth, canvasHeight, size, opacity, currentScale, currentPan) => {
-    ctx.save();
-    
-    // 设置网格样式
-    ctx.strokeStyle = `rgba(0, 0, 0, ${opacity})`;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([]);
-
-    const effectiveGridSize = size * currentScale;
-    const offsetX = (currentPan.x % effectiveGridSize + effectiveGridSize) % effectiveGridSize;
-    const offsetY = (currentPan.y % effectiveGridSize + effectiveGridSize) % effectiveGridSize;
-
-    // 绘制垂直线
-    ctx.beginPath();
-    for (let x = offsetX; x <= canvasWidth; x += effectiveGridSize) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvasHeight);
-    }
-    ctx.stroke();
-
-    // 绘制水平线
-    ctx.beginPath();
-    for (let y = offsetY; y <= canvasHeight; y += effectiveGridSize) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvasWidth, y);
-    }
-    ctx.stroke();
-
-    // 绘制主网格线（每5个网格一条粗线）
-    ctx.strokeStyle = `rgba(0, 0, 0, ${opacity * 2})`;
-    ctx.lineWidth = 1.5;
-    
-    const majorGridSize = effectiveGridSize * 5;
-    const majorOffsetX = (currentPan.x % majorGridSize + majorGridSize) % majorGridSize;
-    const majorOffsetY = (currentPan.y % majorGridSize + majorGridSize) % majorGridSize;
-
-    ctx.beginPath();
-    for (let x = majorOffsetX; x <= canvasWidth; x += majorGridSize) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvasHeight);
-    }
-    ctx.stroke();
-
-    ctx.beginPath();
-    for (let y = majorOffsetY; y <= canvasHeight; y += majorGridSize) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvasWidth, y);
-    }
-    ctx.stroke();
-
-    ctx.restore();
-  };
+    drawRuler(ctx, width, height, rulerThickness, scale, { x: panX, y: panY });
+  }, [width, height, showRuler, rulerThickness, scale, panX, panY]);
 
   const drawRuler = (ctx, canvasWidth, canvasHeight, thickness, currentScale, currentPan) => {
     ctx.save();
@@ -215,12 +191,29 @@ const GridRulerOverlay = ({
     ctx.restore();
   };
 
+  if (!showGrid && !showRuler) {
+    return null;
+  }
+
   return (
-    <canvas
-      ref={canvasRef}
+    <div
       className={`absolute top-0 left-0 pointer-events-none z-10 ${className || ''}`}
       style={{ width, height }}
-    />
+    >
+      {showGrid && (
+        <div
+          className="absolute inset-0"
+          style={gridBackgroundStyle}
+        />
+      )}
+      {showRuler && (
+        <canvas
+          ref={rulerCanvasRef}
+          className="absolute top-0 left-0"
+          style={{ width, height }}
+        />
+      )}
+    </div>
   );
 };
 

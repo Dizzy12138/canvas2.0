@@ -29,9 +29,13 @@ const io = new Server(server, {
   }
 });
 
-// 数据库连接
-connectDB();
-connectRedis();
+const isTest = process.env.NODE_ENV === 'test';
+
+// 数据库和缓存连接（测试环境下跳过，避免对外部服务的依赖）
+if (!isTest) {
+  connectDB();
+  connectRedis();
+}
 
 // 中间件
 app.use(helmet());
@@ -118,10 +122,21 @@ app.use('*', (req, res) => {
 
 const PORT = process.env.PORT || 8000;
 
-server.listen(PORT, () => {
-  console.log(`服务器运行在端口 ${PORT}`);
-  console.log(`环境: ${process.env.NODE_ENV || 'development'}`);
-});
+const startServer = () => {
+  if (!isTest) {
+    server.listen(PORT, () => {
+      console.log(`服务器运行在端口 ${PORT}`);
+      console.log(`环境: ${process.env.NODE_ENV || 'development'}`);
+    });
+  }
+
+  return server;
+};
+
+// 非测试环境自动启动
+if (!isTest) {
+  startServer();
+}
 
 // 优雅关闭
 process.on('SIGTERM', () => {
@@ -133,3 +148,6 @@ process.on('SIGTERM', () => {
 });
 
 module.exports = app;
+module.exports.startServer = startServer;
+module.exports.server = server;
+
