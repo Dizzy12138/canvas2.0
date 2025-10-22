@@ -1,6 +1,36 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import ExecutionHistory from '@frontend/components/ExecutionHistory';
+
+const LOG_LIMIT = 100;
+
+const TYPE_DEFAULTS = {
+  upload_image: '',
+  text_input: '',
+  textarea: '',
+  select: '',
+  slider: 0,
+  checkbox: false,
+  number_input: 0,
+  color_picker: '#000000',
+  toggle: false,
+  json_editor: '{}',
+  image_preview_select: '',
+  tag_group_single: '',
+  tag_group_multi: []
+};
+
+const getDefaultValueForType = (type) => {
+  if (!type) return '';
+  const value = TYPE_DEFAULTS[type];
+  if (Array.isArray(value)) {
+    return [...value];
+  }
+  if (value && typeof value === 'object') {
+    return { ...value };
+  }
+  return value !== undefined ? value : '';
+};
 
 const AppRunner = ({ appId }) => {
   const [formData, setFormData] = useState({});
@@ -11,6 +41,8 @@ const AppRunner = ({ appId }) => {
   const [uploading, setUploading] = useState({});
   const [executionLog, setExecutionLog] = useState([]);
   const [sseConnection, setSseConnection] = useState(null);
+  const [validationErrors, setValidationErrors] = useState([]);
+  const [showLogs, setShowLogs] = useState(false);
 
   // 加载页面DSL和应用配置以构建表单
   useEffect(() => {
@@ -27,6 +59,34 @@ const AppRunner = ({ appId }) => {
     };
   }, [appId]);
 
+  useEffect(() => {
+    if (!pageDSL?.components) {
+      return;
+    }
+    setFormData(prev => {
+      const next = { ...prev };
+      for (const component of pageDSL.components) {
+        const key = component.paramKey;
+        if (key && next[key] === undefined) {
+          const fallback = getDefaultValueForType(component.type);
+          if (component.defaultValue !== undefined) {
+            next[key] = Array.isArray(component.defaultValue)
+              ? [...component.defaultValue]
+              : component.defaultValue;
+          } else {
+            next[key] = fallback;
+          }
+        }
+      }
+      return next;
+    });
+  }, [pageDSL]);
+
+  const requiredKeys = useMemo(() => {
+    if (!pageDSL?.components) return [];
+    return pageDSL.components.filter(component => component.required).map(component => component.paramKey);
+  }, [pageDSL]);
+
   const loadAppConfig = async () => {
     try {
       const response = await axios.get(`/api/apps/${appId}`);
@@ -40,6 +100,7 @@ const AppRunner = ({ appId }) => {
     try {
       const response = await axios.get(`/api/apps/${appId}/page`);
       setPageDSL(response.data);
+      setValidationErrors([]);
     } catch (error) {
       console.error('加载页面配置失败', error);
     }
@@ -48,33 +109,72 @@ const AppRunner = ({ appId }) => {
   // 处理表单输入变化
   const handleInputChange = (paramKey, value) => {
     setFormData(prev => ({ ...prev, [paramKey]: value }));
+    setValidationErrors(prev => prev.filter(key => key !== paramKey));
+  };
+
+  const validateForm = () => {
+    if (!requiredKeys.length) return true;
+    const missing = requiredKeys.filter((key) => {
+      const value = formData[key];
+      if (value === undefined || value === null) return true;
+      if (typeof value === 'string' && value.trim() === '') return true;
+      if (Array.isArray(value) && value.length === 0) return true;
+      return false;
+    });
+    setValidationErrors(missing);
+    return missing.length === 0;
   };
 
   // 处理文件上传
-  const handleFileUpload = async (e, paramKey) => {
-    const file = e.target.files[0];
+  const handleFileUpload = async (event, paramKey) => {
+    const file = event.target.files[0];
     if (!file) return;
 
-    setUploading(prev => ({ ...prev, [paramKey]: true }));
-    
+    setUploading(prev => ({
+      ...prev,
+      [paramKey]: { active: true, progress: 0, name: file.name }
+    }));
+
     try {
-      // 这里应该上传文件到对象存储并返回URL
-      // 为简化示例，我们直接使用文件名作为"URL"
-      const fileUrl = `file://${file.name}`;
-      
-      // 更新表单值
-      setFormData(prev => ({ ...prev, [paramKey]: fileUrl }));
+      const payload = new FormData();
+      payload.append('file', file);
+
+      const response = await axios.post('/api/uploads', payload, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          if (!progressEvent.total) return;
+          const percentage = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+          setUploading(prev => ({
+            ...prev,
+            [paramKey]: { active: true, progress: percentage, name: file.name }
+          }));
+        }
+      });
+
+      const fileUrl = response?.data?.data?.url;
+      if (fileUrl) {
+        setFormData(prev => ({ ...prev, [paramKey]: fileUrl }));
+      }
     } catch (error) {
       console.error('文件上传失败', error);
+      const message = error?.response?.data?.error?.message || '文件上传失败';
+      alert(message);
     } finally {
-      setUploading(prev => ({ ...prev, [paramKey]: false }));
+      setUploading(prev => ({
+        ...prev,
+        [paramKey]: { active: false, progress: 100, name: file.name }
+      }));
     }
   };
 
   // 渲染表单组件
   const renderComponent = (component) => {
-    const { type, title, paramKey, defaultValue, props = {}, biz = false } = component;
-    
+    const { type, title, paramKey, defaultValue, props = {}, biz = false, helpText } = component;
+
+    if (!paramKey) {
+      return null;
+    }
+
     // 检查是否为商业版功能
     if (biz) {
       return (
@@ -93,14 +193,30 @@ const AppRunner = ({ appId }) => {
         </div>
       );
     }
-    
+
+    const value = formData[paramKey] !== undefined ? formData[paramKey] : (defaultValue !== undefined ? defaultValue : getDefaultValueForType(type));
+    const error = validationErrors.includes(paramKey);
+    const uploadState = uploading[paramKey];
+
+    const labelNode = (
+      <div className="flex items-start justify-between">
+        <div>
+          <label className="block text-sm font-medium text-gray-700">
+            {title || component.friendlyName || paramKey}
+          </label>
+          {helpText && (
+            <p className="mt-1 text-xs text-gray-500">{helpText}</p>
+          )}
+        </div>
+        {error && <span className="text-xs text-red-500">必填</span>}
+      </div>
+    );
+
     switch (type) {
       case 'upload_image':
         return (
           <div key={paramKey} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {title}
-            </label>
+            {labelNode}
             <div className="flex items-center">
               <input
                 type="file"
@@ -113,45 +229,36 @@ const AppRunner = ({ appId }) => {
                   file:bg-blue-50 file:text-blue-700
                   hover:file:bg-blue-100"
               />
-              {uploading[paramKey] && (
-                <div className="ml-3">
-                  <svg className="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                </div>
+              {uploadState?.active && (
+                <div className="ml-3 text-sm text-gray-600">{uploadState.progress}%</div>
               )}
             </div>
-            {formData[paramKey] && (
-              <p className="mt-1 text-sm text-gray-500">已上传: {formData[paramKey]}</p>
+            {value && (
+              <p className="mt-1 text-sm text-gray-500 break-all">已上传: {value}</p>
             )}
           </div>
         );
-        
+
       case 'text_input':
         return (
           <div key={paramKey} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {title}
-            </label>
+            {labelNode}
             <input
               type="text"
-              value={formData[paramKey] || defaultValue || ''}
+              value={value || ''}
               onChange={(e) => handleInputChange(paramKey, e.target.value)}
               placeholder={props.placeholder || ''}
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
         );
-        
+
       case 'textarea':
         return (
           <div key={paramKey} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {title}
-            </label>
+            {labelNode}
             <textarea
-              value={formData[paramKey] || defaultValue || ''}
+              value={value || ''}
               onChange={(e) => handleInputChange(paramKey, e.target.value)}
               placeholder={props.placeholder || ''}
               rows={props.rows || 3}
@@ -163,11 +270,9 @@ const AppRunner = ({ appId }) => {
       case 'select':
         return (
           <div key={paramKey} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {title}
-            </label>
+            {labelNode}
             <select
-              value={formData[paramKey] || defaultValue || ''}
+              value={value || ''}
               onChange={(e) => handleInputChange(paramKey, e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             >
@@ -190,49 +295,64 @@ const AppRunner = ({ appId }) => {
       case 'slider':
         return (
           <div key={paramKey} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {title}
-            </label>
+            {labelNode}
             <input
               type="range"
               min={props.min || 0}
               max={props.max || 100}
-              value={formData[paramKey] !== undefined ? formData[paramKey] : (defaultValue !== undefined ? defaultValue : props.min || 0)}
-              onChange={(e) => handleInputChange(paramKey, parseInt(e.target.value))}
+              value={value !== undefined ? value : props.min || 0}
+              onChange={(e) => handleInputChange(paramKey, parseInt(e.target.value, 10))}
               className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
             />
             <div className="text-center text-sm text-gray-500 mt-1">
-              当前值: {formData[paramKey] !== undefined ? formData[paramKey] : (defaultValue !== undefined ? defaultValue : props.min || 0)}
+              当前值: {value !== undefined ? value : props.min || 0}
             </div>
           </div>
         );
-        
+
       case 'checkbox':
         return (
           <div key={paramKey} className="mb-4 flex items-center">
             <input
               id={paramKey}
               type="checkbox"
-              checked={formData[paramKey] || defaultValue || false}
+              checked={Boolean(value)}
               onChange={(e) => handleInputChange(paramKey, e.target.checked)}
               className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
             />
             <label htmlFor={paramKey} className="ml-2 block text-sm text-gray-700">
-              {title}
+              {title || component.friendlyName || paramKey}
             </label>
           </div>
         );
-        
+
+      case 'toggle':
+        return (
+          <div key={paramKey} className="mb-4">
+            {labelNode}
+            <button
+              type="button"
+              onClick={() => handleInputChange(paramKey, !value)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${value ? 'bg-blue-600' : 'bg-gray-300'}`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${value ? 'translate-x-6' : 'translate-x-1'}`}
+              />
+            </button>
+          </div>
+        );
+
       case 'number_input':
         return (
           <div key={paramKey} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {title}
-            </label>
+            {labelNode}
             <input
               type="number"
-              value={formData[paramKey] || defaultValue || ''}
-              onChange={(e) => handleInputChange(paramKey, parseFloat(e.target.value))}
+              value={value ?? ''}
+              onChange={(e) => {
+                const nextValue = e.target.value === '' ? '' : Number(e.target.value);
+                handleInputChange(paramKey, nextValue);
+              }}
               placeholder={props.placeholder || ''}
               min={props.min}
               max={props.max}
@@ -240,31 +360,126 @@ const AppRunner = ({ appId }) => {
             />
           </div>
         );
-        
+
       case 'color_picker':
         return (
           <div key={paramKey} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {title}
-            </label>
+            {labelNode}
             <input
               type="color"
-              value={formData[paramKey] || defaultValue || '#000000'}
+              value={value || '#000000'}
               onChange={(e) => handleInputChange(paramKey, e.target.value)}
               className="w-full h-10 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
         );
-        
+
+      case 'json_editor':
+        return (
+          <div key={paramKey} className="mb-4">
+            {labelNode}
+            <textarea
+              value={typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2)}
+              onChange={(e) => handleInputChange(paramKey, e.target.value)}
+              rows={props.rows || 6}
+              className="w-full font-mono px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+        );
+
+      case 'image_preview_select':
+        return (
+          <div key={paramKey} className="mb-4">
+            {labelNode}
+            <div className="grid grid-cols-2 gap-3">
+              {(props.options || []).map((option, index) => {
+                const normalized = typeof option === 'string'
+                  ? { value: option, label: option, preview: option }
+                  : option;
+                const selected = value === normalized.value;
+                return (
+                  <button
+                    type="button"
+                    key={index}
+                    onClick={() => handleInputChange(paramKey, normalized.value)}
+                    className={`border rounded-md overflow-hidden focus:outline-none ${selected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'}`}
+                  >
+                    {normalized.preview && (
+                      <img src={normalized.preview} alt={normalized.label} className="w-full h-24 object-cover" />
+                    )}
+                    <div className="p-2 text-sm text-gray-700">{normalized.label}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+
+      case 'tag_group_single':
+        return (
+          <div key={paramKey} className="mb-4">
+            {labelNode}
+            <div className="flex flex-wrap gap-2">
+              {(props.options || []).map((option, index) => {
+                const normalized = typeof option === 'string'
+                  ? { value: option, label: option }
+                  : option;
+                const selected = value === normalized.value;
+                return (
+                  <button
+                    type="button"
+                    key={index}
+                    onClick={() => handleInputChange(paramKey, normalized.value)}
+                    className={`px-3 py-1 rounded-full border ${selected ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 text-gray-700'}`}
+                  >
+                    {normalized.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+
+      case 'tag_group_multi':
+        return (
+          <div key={paramKey} className="mb-4">
+            {labelNode}
+            <div className="flex flex-wrap gap-2">
+              {(props.options || []).map((option, index) => {
+                const normalized = typeof option === 'string'
+                  ? { value: option, label: option }
+                  : option;
+                const selectedValues = Array.isArray(value) ? value : [];
+                const selected = selectedValues.includes(normalized.value);
+                return (
+                  <button
+                    type="button"
+                    key={index}
+                    onClick={() => {
+                      const current = Array.isArray(selectedValues) ? [...selectedValues] : [];
+                      if (selected) {
+                        handleInputChange(paramKey, current.filter(item => item !== normalized.value));
+                      } else {
+                        handleInputChange(paramKey, [...current, normalized.value]);
+                      }
+                    }}
+                    className={`px-3 py-1 rounded-full border ${selected ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 text-gray-700'}`}
+                  >
+                    {normalized.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+
       default:
         return (
           <div key={paramKey} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {title}
-            </label>
+            {labelNode}
             <input
               type="text"
-              value={formData[paramKey] || defaultValue || ''}
+              value={value || ''}
               onChange={(e) => handleInputChange(paramKey, e.target.value)}
               placeholder="请输入内容"
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
@@ -277,9 +492,14 @@ const AppRunner = ({ appId }) => {
   // 提交表单
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!validateForm()) {
+      alert('请填写所有必填参数');
+      return;
+    }
     setLoading(true);
     setResult(null);
     setExecutionLog([]);
+    setShowLogs(false);
     
     let eventSource;
     try {
@@ -301,12 +521,19 @@ const AppRunner = ({ appId }) => {
         eventSource.addEventListener('log', (event) => {
           try {
             const logEntry = JSON.parse(event.data);
-            setExecutionLog(prev => [...prev, logEntry.message]);
+            setExecutionLog(prev => {
+              const next = [...prev, logEntry.message].slice(-LOG_LIMIT);
+              return next;
+            });
           } catch (parseError) {
             if (event?.data) {
-              setExecutionLog(prev => [...prev, event.data]);
+              setExecutionLog(prev => {
+                const next = [...prev, event.data].slice(-LOG_LIMIT);
+                return next;
+              });
             }
           }
+          setShowLogs(prev => (prev ? prev : true));
         });
 
         // 监听结果事件
@@ -372,12 +599,23 @@ const AppRunner = ({ appId }) => {
         
         {executionLog.length > 0 && (
           <div className="mb-6">
-            <h4 className="text-md font-medium text-gray-900 mb-3 border-b border-gray-200 pb-2">执行日志</h4>
-            <div className="bg-gray-900 text-green-400 p-4 rounded font-mono text-sm max-h-40 overflow-y-auto">
-              {executionLog.map((log, index) => (
-                <div key={index}>{log}</div>
-              ))}
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-md font-medium text-gray-900">执行日志</h4>
+              <button
+                type="button"
+                onClick={() => setShowLogs(prev => !prev)}
+                className="text-sm text-blue-600 hover:text-blue-800"
+              >
+                {showLogs ? '收起' : '展开'}
+              </button>
             </div>
+            {showLogs && (
+              <div className="bg-gray-900 text-green-400 p-4 rounded font-mono text-sm max-h-40 overflow-y-auto">
+                {executionLog.map((log, index) => (
+                  <div key={index}>{log}</div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         
@@ -504,12 +742,23 @@ const AppRunner = ({ appId }) => {
                 {/* 实时日志显示 */}
                 {loading && executionLog.length > 0 && (
                   <div className="mt-4 text-left">
-                    <h4 className="text-sm font-medium text-gray-700 mb-2">执行日志</h4>
-                    <div className="bg-gray-900 text-green-400 p-3 rounded font-mono text-xs max-h-32 overflow-y-auto">
-                      {executionLog.map((log, index) => (
-                        <div key={index}>{log}</div>
-                      ))}
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-medium text-gray-700">执行日志</h4>
+                      <button
+                        type="button"
+                        onClick={() => setShowLogs(prev => !prev)}
+                        className="text-xs text-blue-600 hover:text-blue-800"
+                      >
+                        {showLogs ? '收起' : '展开'}
+                      </button>
                     </div>
+                    {showLogs && (
+                      <div className="bg-gray-900 text-green-400 p-3 rounded font-mono text-xs max-h-32 overflow-y-auto">
+                        {executionLog.map((log, index) => (
+                          <div key={index}>{log}</div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

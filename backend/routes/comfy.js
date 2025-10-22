@@ -5,6 +5,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const multer = require('multer');
 const AIService = require('../models/AIService');
+const { applyWorkflowParameters } = require('../utils/workflow');
 
 const router = express.Router();
 
@@ -76,16 +77,8 @@ router.post('/proxy/prompt', async (req, res, next) => {
 
     // 处理工作流参数
     let promptPayload = payload;
-    if (payload.workflowParams) {
-      // 这里可以根据需要修改payload，将工作流参数注入到适当的位置
-      // 例如，可以修改KSampler节点的参数
-      promptPayload = { ...payload };
-      
-      // 如果有工作流数据，可以进一步处理
-      if (payload.workflowData && payload.workflowData.data) {
-        // 根据工作流参数修改payload
-        promptPayload = processWorkflowParameters(promptPayload, payload.workflowParams, payload.workflowData.data);
-      }
+    if (payload.workflowParams && payload.workflowData) {
+      promptPayload = applyWorkflowParameters(payload, payload.workflowParams, payload.workflowData);
     }
 
     // Forward request
@@ -112,58 +105,6 @@ router.post('/proxy/prompt', async (req, res, next) => {
     }
   } catch (err) { next(err); }
 });
-
-// 处理工作流参数的辅助函数
-function processWorkflowParameters(payload, workflowParams, workflowData) {
-  // 创建payload的深拷贝以避免修改原始数据
-  const processedPayload = JSON.parse(JSON.stringify(payload));
-  
-  // 如果有工作流参数，将它们应用到payload中
-  if (workflowParams && workflowData.parameters) {
-    // 这里可以根据工作流的定义来处理参数
-    // 例如，修改KSampler节点的参数
-    if (processedPayload.prompt) {
-      // 遍历所有节点，查找KSampler节点并更新其参数
-      for (const nodeId in processedPayload.prompt) {
-        const node = processedPayload.prompt[nodeId];
-        if (node.class_type === "KSampler") {
-          // 更新KSampler节点的参数
-          if (workflowParams.steps !== undefined) {
-            node.inputs.steps = workflowParams.steps;
-          }
-          if (workflowParams.cfg !== undefined) {
-            node.inputs.cfg = workflowParams.cfg;
-          }
-          if (workflowParams.sampler_name !== undefined) {
-            node.inputs.sampler_name = workflowParams.sampler_name;
-          }
-          if (workflowParams.scheduler !== undefined) {
-            node.inputs.scheduler = workflowParams.scheduler;
-          }
-          if (workflowParams.denoise !== undefined) {
-            node.inputs.denoise = workflowParams.denoise;
-          }
-          if (workflowParams.seed !== undefined && workflowParams.seed !== -1) {
-            node.inputs.seed = workflowParams.seed;
-          }
-        } else if (node.class_type === "EmptyLatentImage") {
-          // 更新EmptyLatentImage节点的参数
-          if (workflowParams.width !== undefined) {
-            node.inputs.width = workflowParams.width;
-          }
-          if (workflowParams.height !== undefined) {
-            node.inputs.height = workflowParams.height;
-          }
-          if (workflowParams.batch_size !== undefined) {
-            node.inputs.batch_size = workflowParams.batch_size;
-          }
-        }
-      }
-    }
-  }
-  
-  return processedPayload;
-}
 
 // 添加工作流管理API
 // 获取工作流列表

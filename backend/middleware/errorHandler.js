@@ -1,32 +1,68 @@
+const DEFAULT_ERROR_CODE = '500_INTERNAL_ERROR';
+
 const errorHandler = (err, req, res, next) => {
-  let error = { ...err };
-  error.message = err.message;
+  const statusCode = err.statusCode || inferStatusCode(err) || 500;
+  const code = err.code || mapStatusToCode(statusCode);
+  const message = err.message || '服务器内部错误';
+  const detail = err.detail || extractValidationDetail(err);
 
-  console.error(err);
-
-  // Mongoose坏的ObjectId
-  if (err.name === 'CastError') {
-    const message = '资源未找到';
-    error = { message, statusCode: 404 };
+  if (process.env.NODE_ENV !== 'test') {
+    // eslint-disable-next-line no-console
+    console.error(err);
   }
 
-  // Mongoose重复键错误
-  if (err.code === 11000) {
-    const message = '资源已存在';
-    error = { message, statusCode: 400 };
+  const payload = {
+    error: {
+      code,
+      message,
+      ...(detail ? { detail } : {})
+    }
+  };
+
+  if (process.env.NODE_ENV === 'development' && err.stack) {
+    payload.error.stack = err.stack;
   }
 
-  // Mongoose验证错误
-  if (err.name === 'ValidationError') {
-    const message = Object.values(err.errors).map(val => val.message).join(', ');
-    error = { message, statusCode: 400 };
-  }
-
-  res.status(error.statusCode || 500).json({
-    success: false,
-    message: error.message || '服务器内部错误',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
+  res.status(statusCode).json(payload);
 };
+
+function inferStatusCode(err) {
+  if (err.name === 'CastError') {
+    return 404;
+  }
+  if (err.code === 11000) {
+    return 409;
+  }
+  if (err.name === 'ValidationError') {
+    return 422;
+  }
+  return err.statusCode;
+}
+
+function mapStatusToCode(statusCode) {
+  switch (statusCode) {
+    case 400:
+      return '400_INVALID_REQUEST';
+    case 401:
+      return '401_UNAUTHORIZED';
+    case 403:
+      return '403_FORBIDDEN';
+    case 404:
+      return '404_NOT_FOUND';
+    case 409:
+      return '409_CONFLICT';
+    case 422:
+      return '422_UNPROCESSABLE_ENTITY';
+    default:
+      return DEFAULT_ERROR_CODE;
+  }
+}
+
+function extractValidationDetail(err) {
+  if (err.name === 'ValidationError') {
+    return Object.values(err.errors || {}).map(val => val.message);
+  }
+  return err.detail;
+}
 
 module.exports = errorHandler;
