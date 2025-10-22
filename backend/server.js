@@ -23,7 +23,7 @@ const aiRoutes = require('./routes/ai');
 const servicesRoutes = require('./routes/services');
 const comfyRoutes = require('./routes/comfy');
 const appsRoutes = require('./routes/apps');
-console.log('All routes imported'); // 添加调试信息
+const uploadRoutes = require('./routes/uploads');
 
 const app = express();
 const server = createServer(app);
@@ -78,7 +78,7 @@ app.use('/api/ai', authMiddleware, aiRoutes);
 app.use('/api/services', servicesRoutes);
 app.use('/api/comfy', comfyRoutes);
 app.use('/api/apps', appsRoutes); // 确保这个路由正确注册，不使用认证中间件
-console.log('Apps routes registered'); // 添加调试信息
+app.use('/api/uploads', uploadRoutes);
 
 // 健康检查
 app.get('/health', (req, res) => {
@@ -91,28 +91,19 @@ app.get('/health', (req, res) => {
 
 // Socket.IO连接处理
 io.on('connection', (socket) => {
-  console.log('用户连接:', socket.id);
-
   // 加入项目房间
   socket.on('join-project', (projectId) => {
     socket.join(`project-${projectId}`);
-    console.log(`用户 ${socket.id} 加入项目 ${projectId}`);
   });
 
   // 离开项目房间
   socket.on('leave-project', (projectId) => {
     socket.leave(`project-${projectId}`);
-    console.log(`用户 ${socket.id} 离开项目 ${projectId}`);
   });
 
   // AI生成状态更新
   socket.on('ai-generation-status', (data) => {
     socket.to(`project-${data.projectId}`).emit('ai-status-update', data);
-  });
-
-  // 断开连接
-  socket.on('disconnect', () => {
-    console.log('用户断开连接:', socket.id);
   });
 });
 
@@ -135,8 +126,12 @@ const PORT = process.env.PORT || 8001; // 恢复默认端口为8001
 const startServer = () => {
   if (!isTest) {
     server.listen(PORT, () => {
-      console.log(`服务器运行在端口 ${PORT}`);
-      console.log(`环境: ${process.env.NODE_ENV || 'development'}`);
+      if (process.env.NODE_ENV !== 'test') {
+        // eslint-disable-next-line no-console
+        console.log(`服务器运行在端口 ${PORT}`);
+        // eslint-disable-next-line no-console
+        console.log(`环境: ${process.env.NODE_ENV || 'development'}`);
+      }
     });
   }
 
@@ -150,9 +145,15 @@ if (!isTest) {
 
 // 优雅关闭
 process.on('SIGTERM', () => {
-  console.log('收到SIGTERM信号，开始优雅关闭...');
+  if (process.env.NODE_ENV !== 'test') {
+    // eslint-disable-next-line no-console
+    console.log('收到SIGTERM信号，开始优雅关闭...');
+  }
   server.close(() => {
-    console.log('服务器已关闭');
+    if (process.env.NODE_ENV !== 'test') {
+      // eslint-disable-next-line no-console
+      console.log('服务器已关闭');
+    }
     process.exit(0);
   });
 });

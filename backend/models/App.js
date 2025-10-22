@@ -16,7 +16,11 @@ const AppSchema = new mongoose.Schema(
     outputs: [{
       nodeId: { type: Number, required: true },
       port: { type: String },
-      type: { type: String, enum: ['image', 'video', 'text', 'file'], required: true },
+      type: {
+        type: String,
+        enum: ['image', 'video', 'text', 'file', '3d_model', 'audio', 'any'],
+        required: true
+      },
       isPrimary: { type: Boolean, default: false },
       // 添加参数映射字段
       parameterMappings: [{
@@ -28,10 +32,13 @@ const AppSchema = new mongoose.Schema(
       }]
     }],
     // 添加节点参数字段
-    nodeParameters: { 
+    nodeParameters: {
       type: mongoose.Schema.Types.Mixed,
       default: {}
     },
+    preferredServers: [{ type: String }],
+    excludedServers: [{ type: String }],
+    computeCost: { type: Number, default: 0 },
     isActive: { type: Boolean, default: false },
     createdBy: { type: String },
     updatedBy: { type: String }
