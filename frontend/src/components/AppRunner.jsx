@@ -281,36 +281,73 @@ const AppRunner = ({ appId }) => {
     setResult(null);
     setExecutionLog([]);
     
+    let eventSource;
     try {
       // 创建SSE连接以获取实时日志
-      const eventSource = new EventSource(`/api/apps/${appId}/run-stream?params=${encodeURIComponent(JSON.stringify(formData))}`);
+      eventSource = new EventSource(`/api/apps/${appId}/run-stream?params=${encodeURIComponent(JSON.stringify(formData))}`);
       setSseConnection(eventSource);
-      
-      // 监听日志事件
-      eventSource.addEventListener('log', (event) => {
-        const logEntry = JSON.parse(event.data);
-        setExecutionLog(prev => [...prev, logEntry.message]);
-      });
-      
-      // 监听结果事件
-      eventSource.addEventListener('result', (event) => {
-        const resultData = JSON.parse(event.data);
-        setResult(resultData);
-        eventSource.close();
-        setLoading(false);
-      });
-      
-      // 监听错误事件
-      eventSource.addEventListener('error', (event) => {
-        const errorData = JSON.parse(event.data);
-        const errorMsg = errorData.message || '处理失败';
-        alert(errorMsg);
-        eventSource.close();
-        setLoading(false);
+
+      await new Promise((resolve, reject) => {
+        let settled = false;
+
+        const markSettled = (action) => {
+          if (!settled) {
+            settled = true;
+            action();
+          }
+        };
+
+        // 监听日志事件
+        eventSource.addEventListener('log', (event) => {
+          try {
+            const logEntry = JSON.parse(event.data);
+            setExecutionLog(prev => [...prev, logEntry.message]);
+          } catch (parseError) {
+            if (event?.data) {
+              setExecutionLog(prev => [...prev, event.data]);
+            }
+          }
+        });
+
+        // 监听结果事件
+        eventSource.addEventListener('result', (event) => {
+          markSettled(() => {
+            try {
+              const resultData = JSON.parse(event.data);
+              setResult(resultData);
+              resolve();
+            } catch (parseError) {
+              reject(parseError);
+            }
+          });
+        });
+
+        // 监听错误事件
+        eventSource.addEventListener('error', (event) => {
+          markSettled(() => {
+            let errorMsg = '处理失败';
+
+            if (event?.data) {
+              try {
+                const errorData = JSON.parse(event.data);
+                errorMsg = errorData.message || errorMsg;
+              } catch (parseError) {
+                errorMsg = event.data || errorMsg;
+              }
+            }
+
+            reject(new Error(errorMsg));
+          });
+        });
       });
     } catch (error) {
-      const errorMsg = error.response?.data?.error?.message || '处理失败';
-      alert(errorMsg);
+      const fallbackMsg = error?.response?.data?.error?.message || error?.message || '处理失败';
+      alert(fallbackMsg);
+    } finally {
+      if (eventSource) {
+        eventSource.close();
+      }
+      setSseConnection(null);
       setLoading(false);
     }
   };
