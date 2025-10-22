@@ -148,7 +148,9 @@ router.delete('/:id', async (req, res, next) => {
       return res.status(400).json({ success: false, message: '该服务已被任务或用户绑定，无法删除' });
     }
     
-    await AIService.deleteOne({ id: s.id });
+    const usingInMemoryStore = global.AIService && !Object.prototype.hasOwnProperty.call(s, '_id');
+    const deleteCondition = usingInMemoryStore ? { id: s.id } : { _id: s._id };
+    await AIService.deleteOne(deleteCondition);
     res.json({ success: true });
   } catch (err) { next(err); }
 });
