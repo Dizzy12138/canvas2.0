@@ -1,57 +1,34 @@
-import React, { useState } from 'react';
-import { Layout, Workflow, Package, Palette } from 'lucide-react';
+import React from 'react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, screen, cleanup } from '@testing-library/react';
+import App from './App';
 
-function App() {
-  const [activeView, setActiveView] = useState('test');
+vi.mock('@frontend/components/AppBuilder', () => ({
+  default: () => <div>App Builder Mock</div>
+}), { virtual: true });
 
-  // 测试组件
-  const TestComponent = () => (
-    <div className="p-4">
-      <h1 className="text-xl font-bold">图标测试组件</h1>
-      <div className="flex items-center space-x-2 mt-4">
-        <Layout size={16} />
-        <span>画布图标</span>
-      </div>
-      <div className="flex items-center space-x-2 mt-2">
-        <Workflow size={16} />
-        <span>工作流图标</span>
-      </div>
-      <div className="flex items-center space-x-2 mt-2">
-        <Package size={16} />
-        <span>应用构建器图标</span>
-      </div>
-      <div className="flex items-center space-x-2 mt-2">
-        <Palette size={16} />
-        <span>欧智艺术图标</span>
-      </div>
-    </div>
-  );
+vi.mock('./components/WorkflowEditorPage.jsx', () => ({
+  default: () => <div>Workflow Editor Mock</div>
+}));
 
-  return (
-    <div className="App h-screen flex flex-col">
-      {/* 顶部导航栏 */}
-      <div className="p-3 border-b border-gray-200 bg-white flex items-center justify-between">
-        <h1 className="text-lg font-bold text-gray-900">AI Canvas Tool - 图标测试</h1>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => setActiveView('test')}
-            className={`px-3 py-2 rounded-lg text-sm transition-colors ${
-              activeView === 'test'
-                ? 'bg-blue-500 text-white'
-                : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            测试
-          </button>
-        </div>
-      </div>
+vi.mock('./components/OuzhiArtPlatform.jsx', () => ({
+  default: () => <div>Ouzhi Art Mock</div>
+}));
 
-      {/* 主要内容 */}
-      <div className="flex-1 overflow-hidden">
-        <TestComponent />
-      </div>
-    </div>
-  );
-}
+afterEach(() => {
+  cleanup();
+});
 
-export default App;
+describe('App navigation icons', () => {
+  it('renders lucide icons inside each navigation button', () => {
+    render(<App />);
+
+    const workflowButton = screen.getByRole('button', { name: '工作流' });
+    const appBuilderButton = screen.getByRole('button', { name: '应用构建器' });
+    const ouzhiButton = screen.getByRole('button', { name: '欧智艺术' });
+
+    expect(workflowButton.querySelector('svg')).not.toBeNull();
+    expect(appBuilderButton.querySelector('svg')).not.toBeNull();
+    expect(ouzhiButton.querySelector('svg')).not.toBeNull();
+  });
+});
