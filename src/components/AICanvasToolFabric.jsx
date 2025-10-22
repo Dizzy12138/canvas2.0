@@ -1,14 +1,20 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useLayers } from '../hooks/useLayers';
-import { useHistory } from '../hooks/useHistory';
+﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { io } from 'socket.io-client';
+import { submitPrompt, resolveEndpoint } from '../api/index.js';
+import ServiceManager from './settings/ServiceManager.jsx';
+import VisualWorkflowEditor from './VisualWorkflowEditor.jsx';
+// 导入新的组件和hooks
+import { useEnhancedLayers } from '../hooks/useEnhancedLayers';
+import { useLayerHistory } from '../hooks/useLayerHistory';
 import FabricCanvas from './FabricCanvasFixed';
 import Toolbar from './Toolbar';
-import LayerPanel from './LayerPanel';
+import EnhancedLayerPanel from './EnhancedLayerPanel';
 import PropertyPanel from './PropertyPanel';
 import AIPanel from './AIPanel';
 import MaskManager from './MaskManager';
 import AlignAssistSystem from './AlignAssistSystem';
 import CanvasDebugger from '../utils/CanvasDebugger';
+import LayerDiffViewer from './LayerDiffViewer';
 
 const AICanvasToolFabric = () => {
   const fabricCanvasRef = useRef(null);
@@ -16,21 +22,52 @@ const AICanvasToolFabric = () => {
 
   console.log('AICanvasToolFabric component rendered');
 
+  // 使用增强的图层hook
   const { 
     layers, 
     activeLayerId, 
+    layerGroups,
+    masks,
     setLayers, 
     addLayer,
     deleteLayer,
     setActiveLayerId,
     toggleLayerVisibility,
     toggleLayerLock,
-    updateLayer
-  } = useLayers([
-    { id: 'layer-1', name: '图层 1', visible: true, locked: false, opacity: 1, objects: [] }
+    updateLayer,
+    renameLayer,
+    setLayerOpacity,
+    setLayerBlendMode,
+    reorderLayer,
+    createLayerGroup,
+    deleteLayerGroup,
+    createMaskForLayer,
+    updateMask,
+    deleteMask,
+    addLayerEffect,
+    updateLayerEffect,
+    deleteLayerEffect,
+    mergeLayers,
+    mergeMultipleLayers,
+    splitLayer,
+    duplicateLayer,
+    cloneLayer,
+    fuseLayers
+  } = useEnhancedLayers([
+    { id: 'layer-1', name: '图层 1', visible: true, locked: false, opacity: 1, blendMode: 'normal', objects: [], orderIndex: 0 }
   ]);
   
-  const { save, current, resumeRecording, undo, redo } = useHistory(50);
+  // 使用图层历史hook
+  const { 
+    history, 
+    currentIndex: historyIndex,
+    save: saveHistory,
+    undo: undoHistory,
+    redo: redoHistory,
+    goTo: goToHistory,
+    getHistoryDiff,
+    applyDiffToCurrent
+  } = useLayerHistory(50);
 
   const [activeTool, setActiveTool] = useState('brush');
   const [strokeColor, setStrokeColor] = useState('#000000');
@@ -41,11 +78,16 @@ const AICanvasToolFabric = () => {
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const [showMaskPanel, setShowMaskPanel] = useState(false);
   const [showAssistPanel, setShowAssistPanel] = useState(false);
-  const [canvasReady, setCanvasReady] = useState(false); // 追踪画布是否就绪
+  const [canvasReady, setCanvasReady] = useState(false); // 标记画布是否就绪
+  const [showServiceManager, setShowServiceManager] = useState(false);
+  const [jobs, setJobs] = useState([]);
+  const [workflowParams, setWorkflowParams] = useState({}); // 工作流参数状态
+  const [selectedWorkflowData, setSelectedWorkflowData] = useState(null); // 当前选择的工作流数据
+  const [diffView, setDiffView] = useState(null); // 差异视图数据
   
-  // 辅助系统状态
+  // 辅助系统默认设置
   const [assistSettings, setAssistSettings] = useState({
-    showGrid: false,
+    showGrid: true,
     showRuler: false,
     showGuidelines: false,
     snapToGrid: false,
@@ -53,7 +95,12 @@ const AICanvasToolFabric = () => {
     gridSize: 20
   });
 
-  // 画布尺寸调整
+  // 保存历史记录
+  useEffect(() => {
+    saveHistory(layers, layerGroups, masks);
+  }, [layers, layerGroups, masks, saveHistory]);
+
+  // 更新画布大小
   useEffect(() => {
     const updateCanvasSize = () => {
       const container = containerRef.current;
@@ -61,35 +108,39 @@ const AICanvasToolFabric = () => {
       
       const rect = container.getBoundingClientRect();
       setCanvasSize({
-        width: Math.floor(rect.width - 40), // 留一些边距
-        height: Math.floor(rect.height - 40)
+        width: Math.max(100, Math.floor(rect.width - 40)),
+        height: Math.max(100, Math.floor(rect.height - 40))
       });
     };
 
     updateCanvasSize();
     window.addEventListener('resize', updateCanvasSize);
-    
+
+    // AI代理提交（MVP）
     return () => {
       window.removeEventListener('resize', updateCanvasSize);
     };
   }, []);
 
-  // 存储真实的Canvas实例
+  useEffect(() => {
+    console.log('Assist settings changed:', assistSettings);
+  }, [assistSettings]);
+
+  // 保存 fabric canvas 实例
   const [fabricCanvas, setFabricCanvas] = useState(null);
 
-  // Canvas就绪回调
+  // Canvas 就绪回调
   const handleCanvasReady = useCallback((canvas) => {
-    console.log('🚀 Canvas就绪回调被调用:', canvas);
-    console.log('🔍 Canvas检查详情:', {
+    console.log('onCanvasReady called with:', canvas);
+    console.log('Canvas debug info:', {
       canvas,
-      constructor: canvas?.constructor?.name,
+      constructorName: canvas?.constructor?.name,
       hasOnMethod: typeof canvas?.on === 'function',
       hasRenderAll: typeof canvas?.renderAll === 'function',
       width: canvas?.width,
       height: canvas?.height
     });
     
-    // 更宽松的Fabric.js Canvas检查
     const isValidFabricCanvas = canvas && 
       typeof canvas === 'object' &&
       (canvas.constructor?.name === 'Canvas' || canvas.constructor?.name === 'klass') &&
@@ -98,12 +149,12 @@ const AICanvasToolFabric = () => {
       typeof canvas.renderAll === 'function';
     
     if (isValidFabricCanvas) {
-      setFabricCanvas(canvas);  // 直接设置Canvas实例
+      setFabricCanvas(canvas);
       setCanvasReady(true);
-      console.log('✅ Canvas实例已设置并标记为就绪');
+      console.log('Canvas 实例已设置并标记为就绪');
     } else {
-      console.warn('❌ Canvas实例无效，缺少必要方法或构造函数不正确');
-      console.log('详细检查:', {
+      console.warn('Canvas 实例校验未通过，可能不是 Fabric.js Canvas 实例或缺少方法');
+      console.log('校验详情:', {
         constructorName: canvas?.constructor?.name,
         hasOn: typeof canvas?.on === 'function',
         hasGetActiveObjects: typeof canvas?.getActiveObjects === 'function',
@@ -112,76 +163,78 @@ const AICanvasToolFabric = () => {
     }
   }, []);
 
-  // 监听画布初始化状态 - 使用直接传递的Canvas实例
+  // 使用 direct fabricCanvas 时的校验
   useEffect(() => {
     let mounted = true;
     
     if (fabricCanvas) {
-      console.log('✅ 使用直接传递的Canvas实例:', fabricCanvas);
+      console.log('使用直接提供的 Canvas 实例:', fabricCanvas);
       
-      // 立即调试Canvas
       const debugResult = CanvasDebugger.debugCanvas(fabricCanvas, 'Direct Canvas Instance');
       
-      // 使用CanvasDebugger的验证结果
       if (debugResult.isValid && debugResult.isFabricCanvas) {
-        console.log('✅ Direct Canvas实例验证通过!');
+        console.log('Direct Canvas 实例校验通过');
         setCanvasReady(true);
       } else {
-        console.warn('❌ Direct Canvas实例验证失败');
-        console.log('验证结果:', debugResult);
+        console.warn('Direct Canvas 实例校验失败');
+        console.log('校验结果:', debugResult);
         setCanvasReady(false);
       }
     } else {
-      console.log('⏳ 等待Canvas实例传递...');
+      console.log('没有可用的 Canvas 引用');
       setCanvasReady(false);
     }
-    
+
+    // AI代理提交（MVP）
     return () => {
       mounted = false;
     };
-  }, [fabricCanvas]); // 依赖fabricCanvas实例
+  }, [fabricCanvas]);
 
-  // 处理对象添加
+  // 对象添加处理
   const handleObjectAdded = (obj, layerId) => {
     console.log('Object added to layer:', layerId, obj);
-    // 这里可以将对象添加到图层数据中
     const objectData = {
       id: `obj-${Date.now()}`,
       type: obj.type,
-      data: obj.toObject(),
+      data: typeof obj.toObject === 'function' ? obj.toObject() : null,
       timestamp: Date.now()
     };
     
     setLayers(prev => prev.map(layer =>
       layer.id === layerId 
-        ? { ...layer, objects: [...layer.objects, objectData] } 
+        ? { ...layer, objects: [...(layer.objects || []), objectData] } 
         : layer
     ));
-    
-    // 保存到历史记录
-    save({ layers: JSON.parse(JSON.stringify(layers)), activeLayerId });
   };
 
-  // 处理对象修改
+  // 对象修改处理
   const handleObjectModified = (obj) => {
     console.log('Object modified:', obj);
-    // 更新图层数据
-    save({ layers: JSON.parse(JSON.stringify(layers)), activeLayerId });
   };
 
-  // 工具栏操作处理
+  // 工具切换
   const handleToolChange = (toolId) => {
+    console.log('切换工具到:', toolId);
     setActiveTool(toolId);
     
-    // 当选择蒙版工具时显示蒙版面板
     if (toolId === 'mask' || toolId === 'clip') {
       setShowMaskPanel(true);
       setShowAssistPanel(false);
-    } 
-    // 当选择辅助工具时显示辅助面板
-    else if (['grid', 'ruler', 'guideline', 'snap', 'align', 'symmetry'].includes(toolId)) {
+    } else if (['grid', 'ruler', 'guideline', 'snap', 'align', 'symmetry'].includes(toolId)) {
       setShowAssistPanel(true);
       setShowMaskPanel(false);
+      
+      if (toolId === 'grid') {
+        console.log('启用网格辅助');
+        setAssistSettings(prev => ({ ...prev, showGrid: true }));
+      } else if (toolId === 'ruler') {
+        console.log('启用标尺辅助');
+        setAssistSettings(prev => ({ ...prev, showRuler: true }));
+      } else if (toolId === 'guideline') {
+        console.log('启用参考线辅助');
+        setAssistSettings(prev => ({ ...prev, showGuidelines: true }));
+      }
     } else {
       setShowMaskPanel(false);
       setShowAssistPanel(false);
@@ -193,10 +246,10 @@ const AICanvasToolFabric = () => {
     
     switch (actionId) {
       case 'undo':
-        undo();
+        undoHistory();
         break;
       case 'redo':
-        redo();
+        redoHistory();
         break;
       case 'save':
         if (canvas && canvas.exportCanvas) {
@@ -206,11 +259,9 @@ const AICanvasToolFabric = () => {
         }
         break;
       case 'open':
-        // TODO: 实现打开功能
         console.log('打开项目');
         break;
       case 'import':
-        // 创建文件输入
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = 'image/*';
@@ -241,13 +292,10 @@ const AICanvasToolFabric = () => {
   };
 
   const handleLayerDelete = (layerId) => {
-    // 使用canvas的图层删除功能
     const canvas = fabricCanvasRef.current;
     if (canvas && canvas.deleteActiveLayer) {
       canvas.deleteActiveLayer(layerId);
     }
-    
-    // 从状态中删除图层
     deleteLayer(layerId);
   };
 
@@ -255,42 +303,32 @@ const AICanvasToolFabric = () => {
     const newLayer = addLayer();
     console.log('New layer added:', newLayer);
   };
+
   const handleLayerRename = (layerId, newName) => {
-    updateLayer(layerId, (layer) => ({ name: newName }));
+    renameLayer(layerId, newName);
   };
 
   const handleLayerToggleLock = (layerId) => {
-    updateLayer(layerId, (layer) => ({ locked: !layer.locked }));
+    toggleLayerLock(layerId);
   };
 
   const handleLayerReorder = (layerId, newIndex) => {
-    const currentIndex = layers.findIndex(layer => layer.id === layerId);
-    if (currentIndex === -1) return;
+    reorderLayer(layerId, newIndex);
     
-    // 更新图层数组顺序
-    const newLayers = [...layers];
-    const [movedLayer] = newLayers.splice(currentIndex, 1);
-    newLayers.splice(newIndex, 0, movedLayer);
-    setLayers(newLayers);
-    
-    // 同时更新Fabric.js中对象的Z-index
     const canvas = fabricCanvasRef.current;
     if (canvas && canvas.reorderLayerObjects) {
-      const direction = newIndex < currentIndex ? 'up' : 'down';
+      const direction = newIndex < layers.findIndex(l => l.id === layerId) ? 'up' : 'down';
       canvas.reorderLayerObjects(layerId, direction);
     }
   };
 
-  // 蒙版处理函数
   const handleMaskCreate = (layerId, shape) => {
     console.log('Creating mask for layer:', layerId, 'with shape:', shape);
-    // 设置当前工具为蒙版工具
     setActiveTool(shape === 'rectangle' ? 'mask' : 'clip');
   };
 
   const handleMaskCreated = (maskData) => {
     console.log('Mask created:', maskData);
-    // 可以在这里更新图层状态，标记该图层已应用蒙版
     setLayers(prev => prev.map(layer =>
       layer.id === maskData.layerId 
         ? { ...layer, hasMask: true, maskData }
@@ -300,8 +338,6 @@ const AICanvasToolFabric = () => {
 
   const handleMaskApplied = (maskData) => {
     console.log('Mask applied:', maskData);
-    // 保存到历史记录
-    save({ layers: JSON.parse(JSON.stringify(layers)), activeLayerId });
   };
 
   const handleMaskRemove = (layerId) => {
@@ -310,14 +346,11 @@ const AICanvasToolFabric = () => {
       canvas.removeMaskFromLayerById(layerId);
     }
     
-    // 更新图层状态
     setLayers(prev => prev.map(layer =>
       layer.id === layerId 
         ? { ...layer, hasMask: false, maskData: null }
         : layer
     ));
-    
-    save({ layers: JSON.parse(JSON.stringify(layers)), activeLayerId });
   };
 
   const handleMaskToggle = (layerId, visible) => {
@@ -326,7 +359,6 @@ const AICanvasToolFabric = () => {
       canvas.toggleMaskVisibility(layerId, visible);
     }
     
-    // 更新图层状态
     setLayers(prev => prev.map(layer =>
       layer.id === layerId && layer.maskData 
         ? { ...layer, maskData: { ...layer.maskData, visible } }
@@ -334,13 +366,13 @@ const AICanvasToolFabric = () => {
     ));
   };
 
-  // 辅助系统处理函数
   const handleAssistToggle = (assistType) => {
     console.log('Assist toggle:', assistType);
     setShowAssistPanel(true);
   };
 
   const handleToggleGrid = () => {
+    console.log('切换网格显示:', !assistSettings.showGrid);
     setAssistSettings(prev => ({ ...prev, showGrid: !prev.showGrid }));
   };
 
@@ -362,32 +394,79 @@ const AICanvasToolFabric = () => {
 
   const handleAlign = (alignType, objects) => {
     console.log('Align operation:', alignType, objects);
-    save({ layers: JSON.parse(JSON.stringify(layers)), activeLayerId });
   };
 
   const handleDistribute = (distributeType, objects) => {
     console.log('Distribute operation:', distributeType, objects);
-    save({ layers: JSON.parse(JSON.stringify(layers)), activeLayerId });
   };
 
   const handleSymmetry = (symmetryType, objects) => {
     console.log('Symmetry operation:', symmetryType, objects);
-    save({ layers: JSON.parse(JSON.stringify(layers)), activeLayerId });
   };
 
-  // AI生成处理
+  // AI 生成处理
   const handleAIGenerate = async (request) => {
     setIsGenerating(true);
     try {
-      console.log('AI生成请求:', request);
-      // 模拟异步操作
+      console.log('AI 生成请求:', request);
       await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      // 模拟生成的图像添加到画布
       const canvas = fabricCanvasRef.current;
       if (canvas && canvas.importCanvas) {
-        // 这里应该是从AI服务获取的图像
-        console.log('AI生成完成，添加到画布...');
+        console.log('AI 生成完成，准备导入到画布');
+      }
+    } catch (error) {
+      console.error('AI 生成失败:', error);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleAIGenerate2 = async ({ request, preferEndpointId }) => {
+    setIsGenerating(true);
+    try {
+      try { await resolveEndpoint(preferEndpointId); } catch (e) { console.warn('解析服务失败', e?.message); }
+      
+      // 添加工作流参数到请求中
+      const enhancedRequest = {
+        ...request,
+        workflowParams: workflowParams
+      };
+      
+      const resp = await submitPrompt({ preferEndpointId, payload: enhancedRequest });
+      if (resp?.jobId) {
+        const socket = io();
+        const jobId = resp.jobId;
+        setJobs(prev => [{ jobId, status: 'queued', progress: 0 }, ...prev].slice(0, 10));
+        socket.on('job:progress', (data) => {
+          if (data.jobId === jobId) {
+            setJobs(prev => prev.map(j => j.jobId === jobId ? { ...j, progress: data.progress, status: 'processing' } : j));
+          }
+        });
+        socket.on('job:complete', async (data) => {
+          if (data.jobId === jobId) {
+            setJobs(prev => prev.map(j => j.jobId === jobId ? { ...j, progress: 100, status: 'completed' } : j));
+            const url = data?.result?.imageUrl;
+            if (url && fabricCanvasRef.current) {
+              try {
+                const canvas = fabricCanvasRef.current;
+                if (canvas && canvas.add && window.fabric?.Image?.fromURL) {
+                  window.fabric.Image.fromURL(url, (img) => {
+                    if (img) {
+                      img.set({ left: 50, top: 50 });
+                      canvas.add(img);
+                      canvas.requestRenderAll?.();
+                    }
+                  });
+                }
+              } catch (e) {
+                console.warn('贴回失败', e);
+              }
+            }
+            socket.disconnect();
+          }
+        });
+      } else {
+        console.log('直接返回：', resp);
       }
     } catch (error) {
       console.error('AI生成失败:', error);
@@ -396,9 +475,82 @@ const AICanvasToolFabric = () => {
     }
   };
 
+  // 图层组重命名处理
+  const handleLayerGroupRename = (groupId, newName) => {
+    setLayerGroups(prev => 
+      prev.map(group => 
+        group.id === groupId ? { ...group, name: newName } : group
+      )
+    );
+  };
+
+  // 图层组切换处理
+  const handleLayerGroupToggle = (groupId) => {
+    // 这个功能已经在EnhancedLayerPanel中处理了
+    console.log('Toggle group:', groupId);
+  };
+
+  // 图层合并处理
+  const handleLayerMerge = ({ targetLayerId, sourceLayerIds }) => {
+    mergeMultipleLayers(targetLayerId, sourceLayerIds);
+  };
+
+  // 图层拆分处理
+  const handleLayerSplit = (layerId) => {
+    splitLayer(layerId);
+  };
+
+  // 图层克隆处理
+  const handleLayerClone = (layerId) => {
+    cloneLayer(layerId);
+  };
+
+  // 跨图层融合处理
+  const handleFusionStart = ({ sourceLayerId, targetLayerId, mode, strength }) => {
+    fuseLayers(sourceLayerId, targetLayerId, mode, strength);
+  };
+
+  // 历史记录跳转
+  const handleHistoryGoTo = (index) => {
+    const state = goToHistory(index);
+    if (state) {
+      setLayers(state.layers);
+      // TODO: 更新其他状态
+    }
+  };
+
+  // 历史记录撤销
+  const handleHistoryUndo = () => {
+    const state = undoHistory();
+    if (state) {
+      setLayers(state.layers);
+      // TODO: 更新其他状态
+    }
+  };
+
+  // 历史记录重做
+  const handleHistoryRedo = () => {
+    const state = redoHistory();
+    if (state) {
+      setLayers(state.layers);
+      // TODO: 更新其他状态
+    }
+  };
+
+  // 历史记录比较
+  const handleHistoryCompare = (index1, index2) => {
+    const diff = getHistoryDiff(index1, index2);
+    setDiffView(diff);
+  };
+
+  // 撤销变更
+  const handleRevertChange = (type, action, data) => {
+    // TODO: 实现撤销变更逻辑
+    console.log('Revert change:', type, action, data);
+  };
+
   return (
     <div className="w-full h-screen bg-gray-50 flex">
-      {/* 左侧工具栏 */}
       <Toolbar
         activeTool={activeTool}
         onToolChange={handleToolChange}
@@ -406,7 +558,6 @@ const AICanvasToolFabric = () => {
         className="w-16 h-full border-r"
       />
 
-      {/* 主画布区域 */}
       <div className="flex-1 flex">
         <div ref={containerRef} className="flex-1 relative overflow-hidden p-4">
           <div className="w-full h-full flex items-center justify-center">
@@ -426,7 +577,6 @@ const AICanvasToolFabric = () => {
               onMaskCreated={handleMaskCreated}
               onMaskApplied={handleMaskApplied}
               onCanvasReady={handleCanvasReady}
-              // 辅助系统属性
               showGrid={assistSettings.showGrid}
               showRuler={assistSettings.showRuler}
               showGuidelines={assistSettings.showGuidelines}
@@ -435,16 +585,29 @@ const AICanvasToolFabric = () => {
               gridSize={assistSettings.gridSize}
               onAssistToggle={handleAssistToggle}
             />
+            {jobs.length > 0 && (
+              <div className="panel p-3">
+                <div className="text-xs text-gray-500 mb-1">任务</div>
+                <ul className="space-y-1 max-h-24 overflow-auto">
+                  {jobs.map(j => (
+                    <li key={j.jobId} className="text-xs text-gray-600">{j.jobId.slice(0,8)} · {j.status} · {j.progress ?? 0}%</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* 右侧面板区域 */}
         <div className="w-80 h-full border-l bg-white overflow-y-auto">
           <div className="space-y-4 p-4">
-            {/* 辅助面板 (当选择辅助工具时显示) */}
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-gray-900">配置</div>
+              <button onClick={() => setShowServiceManager(true)} className="text-xs underline">AI 服务设置</button>
+            </div>
+
             {showAssistPanel && canvasReady && (
               <AlignAssistSystem
-                canvas={fabricCanvas}  // 使用直接传递的Canvas实例
+                canvas={fabricCanvas}
                 showGrid={assistSettings.showGrid}
                 showRuler={assistSettings.showRuler}
                 showGuidelines={assistSettings.showGuidelines}
@@ -461,32 +624,30 @@ const AICanvasToolFabric = () => {
               />
             )}
 
-            {/* 显示加载提示 */}
             {showAssistPanel && !canvasReady && (
               <div className="panel p-3">
                 <div className="flex items-center justify-center h-20 flex-col space-y-2">
                   <div className="text-sm text-gray-500">
-                    初始化辅助系统中...
+                    初始化中...
                   </div>
                   <button
                     onClick={() => {
-                      console.log('🔍 Manual Canvas Debug Check:');
-                      const canvas = fabricCanvas || fabricCanvasRef.current; // 检查两种方式
+                      console.log('Manual Canvas Debug Check:');
+                      const canvas = fabricCanvas || fabricCanvasRef.current;
                       if (canvas) {
                         CanvasDebugger.debugCanvas(canvas, 'Manual Check');
                       } else {
-                        console.log('❌ Canvas reference is null');
+                        console.log('Canvas reference is null');
                       }
                     }}
                     className="px-3 py-1 text-xs bg-blue-100 text-blue-600 rounded hover:bg-blue-200"
                   >
-                    手动检查Canvas状态
+                    手动检测 Canvas
                   </button>
                 </div>
               </div>
             )}
 
-            {/* 蒙版面板 (当选择蒙版工具时显示) */}
             {showMaskPanel && (
               <MaskManager
                 layers={layers}
@@ -498,7 +659,6 @@ const AICanvasToolFabric = () => {
               />
             )}
 
-            {/* 属性面板 */}
             <PropertyPanel
               strokeColor={strokeColor}
               fillColor={fillColor}
@@ -511,10 +671,13 @@ const AICanvasToolFabric = () => {
               onOpacityChange={setOpacity}
             />
 
-            {/* 图层面板 */}
-            <LayerPanel
+            <EnhancedLayerPanel
               layers={layers}
+              layerGroups={layerGroups}
               activeLayerId={activeLayerId}
+              masks={masks}
+              history={history}
+              historyIndex={historyIndex}
               onLayerSelect={setActiveLayerId}
               onLayerAdd={handleLayerAdd}
               onLayerDelete={handleLayerDelete}
@@ -522,13 +685,52 @@ const AICanvasToolFabric = () => {
               onLayerToggleLock={handleLayerToggleLock}
               onLayerRename={handleLayerRename}
               onLayerReorder={handleLayerReorder}
+              onLayerSetOpacity={setLayerOpacity}
+              onLayerSetBlendMode={setLayerBlendMode}
+              onLayerGroupCreate={createLayerGroup}
+              onLayerGroupDelete={deleteLayerGroup}
+              onLayerGroupRename={handleLayerGroupRename}
+              onLayerGroupToggle={handleLayerGroupToggle}
+              onMaskCreate={handleMaskCreate}
+              // 新增的回调函数
+              onLayerMerge={handleLayerMerge}
+              onLayerSplit={handleLayerSplit}
+              onLayerClone={handleLayerClone}
+              onFusionStart={handleFusionStart}
+              onHistoryGoTo={handleHistoryGoTo}
+              onHistoryUndo={handleHistoryUndo}
+              onHistoryRedo={handleHistoryRedo}
+              onHistoryCompare={handleHistoryCompare}
             />
 
-            {/* AI面板 */}
+            {diffView && (
+              <LayerDiffViewer
+                diff={diffView}
+                beforeState={history[historyIndex - 1]}
+                afterState={history[historyIndex]}
+                onRevertChange={handleRevertChange}
+              />
+            )}
+
             <AIPanel
-              onGenerate={handleAIGenerate}
+              onGenerate={handleAIGenerate2}
               isGenerating={isGenerating}
+              onWorkflowChange={setSelectedWorkflowData} // 传递工作流数据给AIPanel
             />
+            
+            <VisualWorkflowEditor
+              workflowData={selectedWorkflowData} // 传递当前选择的工作流数据
+              onParameterChange={setWorkflowParams}
+              onSaveWorkflow={() => console.log('Save workflow')}
+              onLoadWorkflow={() => console.log('Load workflow')}
+            />
+            
+            {showServiceManager && (
+              <ServiceManager 
+                open={showServiceManager} 
+                onClose={() => setShowServiceManager(false)} 
+              />
+            )}
           </div>
         </div>
       </div>

@@ -14,14 +14,14 @@ export function useDrawing({ screenToCanvas, addObject, layers, activeLayerId })
   const transform = useTransform({ screenToCanvas });
 
   const handlePointerDown = useCallback((e) => {
-    console.log('handlePointerDown called with tool:', activeTool);
+    // console.log('handlePointerDown called with tool:', activeTool);
     if (activeTool === 'select') {
       selection.handleSelectionStart(e);
     } else if (activeTool === 'text') {
       textTool.startTextEdit(e);
     } else if (['brush', 'pencil', 'eraser', 'rectangle', 'circle'].includes(activeTool)) {
       const point = screenToCanvas(e.clientX, e.clientY);
-      console.log('Drawing point:', point);
+      // console.log('Drawing point:', point);
       setIsDrawing(true);
       setCurrentStroke([point]);
     }

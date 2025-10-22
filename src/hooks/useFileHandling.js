@@ -3,8 +3,7 @@ import {
   validateFile, 
   readFileAsDataURL, 
   createImageElement,
-  compressImage,
-  exportCanvas 
+  compressImage
 } from '../utils/fileUtils';
 
 export function useFileHandling({ canvasRef, addObject, onProjectLoad }) {

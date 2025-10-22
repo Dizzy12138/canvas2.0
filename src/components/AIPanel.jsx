@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { listServices, listWorkflows, getWorkflow } from '../api/index.js';
 import { 
   Wand2, 
   Image, 
@@ -31,7 +32,8 @@ const presetStyles = [
 const AIPanel = ({ 
   onGenerate,
   isGenerating = false,
-  className 
+  className,
+  onWorkflowChange // 添加这个属性来传递工作流数据给父组件
 }) => {
   const [activeTab, setActiveTab] = useState('text-to-image');
   const [prompt, setPrompt] = useState('');
@@ -45,6 +47,61 @@ const AIPanel = ({
     guidance: 7.5,
     seed: -1,
   });
+  const [workflowParams, setWorkflowParams] = useState({}); // 工作流特定参数
+  const [services, setServices] = useState([]);
+  const [workflows, setWorkflows] = useState([]);
+  const [selectedService, setSelectedService] = useState('auto');
+  const [selectedWorkflow, setSelectedWorkflow] = useState('default');
+  const [selectedWorkflowData, setSelectedWorkflowData] = useState(null);
+  const [history, setHistory] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [servicesList, workflowsList] = await Promise.all([
+          listServices(),
+          listWorkflows()
+        ]);
+        setServices(servicesList);
+        setWorkflows(workflowsList);
+      } catch (e) {
+        console.warn('加载服务或工作流失败', e?.message);
+      }
+    })();
+  }, []);
+
+  // 当选择的工作流改变时，获取工作流详情
+  useEffect(() => {
+    if (selectedWorkflow && selectedWorkflow !== 'default') {
+      (async () => {
+        try {
+          const workflowData = await getWorkflow(selectedWorkflow);
+          setSelectedWorkflowData(workflowData);
+          
+          // 通知父组件工作流已更改
+          onWorkflowChange?.(workflowData);
+          
+          // 初始化工作流参数
+          if (workflowData.data && workflowData.data.parameters) {
+            const initialParams = {};
+            Object.keys(workflowData.data.parameters).forEach(key => {
+              initialParams[key] = workflowData.data.parameters[key].default;
+            });
+            setWorkflowParams(initialParams);
+          }
+        } catch (e) {
+          console.warn('获取工作流详情失败', e?.message);
+          setSelectedWorkflowData(null);
+          setWorkflowParams({});
+          onWorkflowChange?.(null);
+        }
+      })();
+    } else {
+      setSelectedWorkflowData(null);
+      setWorkflowParams({});
+      onWorkflowChange?.(null);
+    }
+  }, [selectedWorkflow]);
 
   const tabs = [
     { id: 'text-to-image', name: '文本生图', icon: Type },
@@ -62,10 +119,14 @@ const AIPanel = ({
       negativePrompt,
       model: selectedModel,
       style: selectedStyle,
+      workflow: selectedWorkflow,
+      workflowData: selectedWorkflowData,
+      workflowParams, // 添加工作流参数
       settings,
     };
-    
-    onGenerate?.(request);
+    const preferEndpointId = selectedService !== 'auto' ? selectedService : undefined;
+    setHistory(prev => [{ id: Date.now(), type: activeTab, prompt, ts: new Date().toISOString() }, ...prev].slice(0, 10));
+    onGenerate?.({ request, preferEndpointId });
   };
 
   const handleStyleSelect = (style) => {
@@ -75,9 +136,132 @@ const AIPanel = ({
     }
   };
 
+  // 根据工作流数据动态生成设置选项
+  const renderWorkflowSettings = () => {
+    if (!selectedWorkflowData || !selectedWorkflowData.data || !selectedWorkflowData.data.parameters) {
+      return null;
+    }
+
+    const parameters = selectedWorkflowData.data.parameters;
+    
+    return (
+      <div className="space-y-3">
+        <h4 className="text-xs font-medium text-gray-700">工作流特定设置</h4>
+        {Object.keys(parameters).map(key => {
+          const param = parameters[key];
+          return (
+            <div key={key} className="space-y-1">
+              <label className="text-xs text-gray-500">
+                {param.label || key}
+                {param.description && (
+                  <span className="text-gray-400 ml-1" title={param.description}>
+                    (?)
+                  </span>
+                )}
+              </label>
+              {param.type === 'number' || param.type === 'integer' ? (
+                param.min !== undefined && param.max !== undefined ? (
+                  <div className="space-y-1">
+                    <input
+                      type="range"
+                      min={param.min}
+                      max={param.max}
+                      step={param.type === 'integer' ? 1 : 0.1}
+                      value={workflowParams[key] || param.default}
+                      onChange={(e) => setWorkflowParams(prev => ({
+                        ...prev,
+                        [key]: param.type === 'integer' ? parseInt(e.target.value) : parseFloat(e.target.value)
+                      }))}
+                      className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <div className="flex justify-between text-xs text-gray-400">
+                      <span>{param.min}</span>
+                      <span>{workflowParams[key] !== undefined ? workflowParams[key] : param.default}</span>
+                      <span>{param.max}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <input
+                    type="number"
+                    step={param.type === 'integer' ? 1 : 0.1}
+                    value={workflowParams[key] || param.default}
+                    onChange={(e) => setWorkflowParams(prev => ({
+                      ...prev,
+                      [key]: param.type === 'integer' ? parseInt(e.target.value) : parseFloat(e.target.value)
+                    }))}
+                    className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                )
+              ) : param.type === 'string' && param.options ? (
+                <select
+                  value={workflowParams[key] || param.default}
+                  onChange={(e) => setWorkflowParams(prev => ({
+                    ...prev,
+                    [key]: e.target.value
+                  }))}
+                  className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  {param.options.map(option => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={workflowParams[key] || param.default}
+                  onChange={(e) => setWorkflowParams(prev => ({
+                    ...prev,
+                    [key]: e.target.value
+                  }))}
+                  className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <div className={clsx('panel p-4 space-y-4', className)}>
       <h3 className="text-sm font-medium text-gray-900">AI 生成</h3>
+
+      {/* 服务选择（只读配置，来源设置中心） */}
+      <div className="space-y-1">
+        <label className="text-xs text-gray-500">服务</label>
+        <select
+          value={selectedService}
+          onChange={(e) => setSelectedService(e.target.value)}
+          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+        >
+          <option value="auto">自动/默认</option>
+          {services.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}{s.isDefault ? '（默认）' : ''} - {s.healthStatus}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* 工作流选择 */}
+      <div className="space-y-1">
+        <label className="text-xs text-gray-500">工作流</label>
+        <select
+          value={selectedWorkflow}
+          onChange={(e) => setSelectedWorkflow(e.target.value)}
+          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+        >
+          <option value="default">默认工作流</option>
+          {workflows.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name} ({w.type === 'builtin' ? '内置' : '自定义'})
+            </option>
+          ))}
+        </select>
+      </div>
 
       {/* 标签页 */}
       <div className="border-b border-gray-200">
@@ -153,6 +337,9 @@ const AIPanel = ({
               ))}
             </div>
           </div>
+
+          {/* 工作流特定设置 */}
+          {renderWorkflowSettings()}
         </div>
       )}
 
@@ -194,6 +381,9 @@ const AIPanel = ({
               <span>高</span>
             </div>
           </div>
+
+          {/* 工作流特定设置 */}
+          {renderWorkflowSettings()}
         </div>
       )}
 
@@ -284,8 +474,22 @@ const AIPanel = ({
               </button>
             </div>
           </div>
+
+          {/* 工作流特定设置 */}
+          {renderWorkflowSettings()}
         </div>
       </details>
+
+      {/* 历史（最近10次） */}
+      <div className="space-y-1">
+        <div className="text-xs text-gray-500">最近任务</div>
+        <ul className="space-y-1 max-h-24 overflow-auto">
+          {history.map(h => (
+            <li key={h.id} className="text-xs text-gray-600 truncate">[{h.type}] {h.prompt || '(无提示)'} · {new Date(h.ts).toLocaleTimeString()}</li>
+          ))}
+          {history.length === 0 && <li className="text-xs text-gray-400">暂无</li>}
+        </ul>
+      </div>
 
       {/* 生成按钮 */}
       <button
@@ -331,6 +535,6 @@ const AIPanel = ({
       </div>
     </div>
   );
-};
+  };
 
 export default AIPanel;

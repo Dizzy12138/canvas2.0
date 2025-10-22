@@ -2,6 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 添加网格背景样式 */
+.bg-grid-pattern {
+  background-image: 
+    linear-gradient(to right, #e5e7eb 1px, transparent 1px),
+    linear-gradient(to bottom, #e5e7eb 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* 滚动条样式 */
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+
+/* 面板样式 */
+.panel {
+  @apply bg-white border border-gray-200 rounded-lg shadow-sm;
+}
+
 @layer base {
   html {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
@@ -36,20 +59,5 @@
   
   .input {
     @apply px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
-  }
-  
-  .panel {
-    @apply bg-white border border-gray-200 rounded-lg shadow-sm;
-  }
-}
-
-@layer utilities {
-  .scrollbar-hidden {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-  
-  .scrollbar-hidden::-webkit-scrollbar {
-    display: none;
   }
 }

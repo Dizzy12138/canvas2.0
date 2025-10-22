@@ -4,7 +4,7 @@ const router = express.Router();
 // AI生成接口
 router.post('/generate', async (req, res) => {
   try {
-    const { type, prompt, settings } = req.body;
+    const { prompt } = req.body;
     
     // 模拟AI生成过程
     const taskId = 'task_' + Date.now();

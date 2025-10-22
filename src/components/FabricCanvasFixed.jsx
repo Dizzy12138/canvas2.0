@@ -1020,6 +1020,7 @@ const FabricCanvas = forwardRef(({
         showGrid={showGrid}
         showRuler={showRuler}
         gridSize={gridSize}
+        gridOpacity={0.3}  // 增加网格透明度使其更可见
         scale={canvasScale}
         pan={canvasPan}
       />

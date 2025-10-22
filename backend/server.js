@@ -6,6 +6,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const multer = require('multer');
 require('dotenv').config();
 
 const connectDB = require('./config/database');
@@ -19,6 +20,10 @@ const userRoutes = require('./routes/users');
 const projectRoutes = require('./routes/projects');
 const fileRoutes = require('./routes/files');
 const aiRoutes = require('./routes/ai');
+const servicesRoutes = require('./routes/services');
+const comfyRoutes = require('./routes/comfy');
+const appsRoutes = require('./routes/apps');
+console.log('All routes imported'); // 添加调试信息
 
 const app = express();
 const server = createServer(app);
@@ -69,6 +74,11 @@ app.use('/api/users', authMiddleware, userRoutes);
 app.use('/api/projects', authMiddleware, projectRoutes);
 app.use('/api/files', authMiddleware, fileRoutes);
 app.use('/api/ai', authMiddleware, aiRoutes);
+// 阶段一：服务管理与代理接口先行，不强制鉴权
+app.use('/api/services', servicesRoutes);
+app.use('/api/comfy', comfyRoutes);
+app.use('/api/apps', appsRoutes); // 确保这个路由正确注册，不使用认证中间件
+console.log('Apps routes registered'); // 添加调试信息
 
 // 健康检查
 app.get('/health', (req, res) => {
@@ -109,10 +119,10 @@ io.on('connection', (socket) => {
 // 将io实例附加到app，供其他模块使用
 app.set('io', io);
 
-// 错误处理中间件
+// 错误处理中间件 - 必须放在所有路由之后
 app.use(errorHandler);
 
-// 404处理
+// 404处理 - 必须放在所有路由之后
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
@@ -120,7 +130,7 @@ app.use('*', (req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 8001; // 恢复默认端口为8001
 
 const startServer = () => {
   if (!isTest) {
@@ -150,4 +160,3 @@ process.on('SIGTERM', () => {
 module.exports = app;
 module.exports.startServer = startServer;
 module.exports.server = server;
-

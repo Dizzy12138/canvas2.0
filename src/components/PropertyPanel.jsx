@@ -1,5 +1,4 @@
 import React from 'react';
-import { Palette, Circle, Square } from 'lucide-react';
 import clsx from 'clsx';
 
 const colorPresets = [

@@ -1,6 +1,11 @@
 // 蒙版功能测试脚本
 // 在浏览器控制台中运行以测试蒙版功能
 
+// 确保fabric.js已加载
+if (typeof fabric === 'undefined') {
+  console.warn('⚠️ Fabric.js未加载，请先加载Fabric.js库');
+}
+
 console.log('🎭 Canvas 2.0 蒙版功能测试');
 
 // 测试函数：创建测试图层和对象

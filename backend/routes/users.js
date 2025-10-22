@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const User = require('../models/User');
 
 // 获取用户信息
 router.get('/profile', (req, res) => {

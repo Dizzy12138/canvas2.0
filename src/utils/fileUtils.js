@@ -88,32 +88,30 @@ export function createImageElement(src) {
  * 压缩图像
  */
 export function compressImage(file, maxWidth = 1920, maxHeight = 1080, quality = 0.8) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const dataURL = await readFileAsDataURL(file);
-      const img = await createImageElement(dataURL);
-      
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      
-      // 计算新尺寸
-      let { width, height } = img;
-      if (width > maxWidth || height > maxHeight) {
-        const ratio = Math.min(maxWidth / width, maxHeight / height);
-        width *= ratio;
-        height *= ratio;
-      }
-      
-      canvas.width = width;
-      canvas.height = height;
-      
-      // 绘制并压缩
-      ctx.drawImage(img, 0, 0, width, height);
-      
-      canvas.toBlob(resolve, file.type, quality);
-    } catch (error) {
-      reject(error);
-    }
+  return new Promise((resolve, reject) => {
+    readFileAsDataURL(file)
+      .then(dataURL => createImageElement(dataURL))
+      .then(img => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 计算新尺寸
+        let { width, height } = img;
+        if (width > maxWidth || height > maxHeight) {
+          const ratio = Math.min(maxWidth / width, maxHeight / height);
+          width *= ratio;
+          height *= ratio;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        // 绘制并压缩
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        canvas.toBlob(resolve, file.type, quality);
+      })
+      .catch(error => reject(error));
   });
 }
 
@@ -209,25 +207,23 @@ function exportCanvasAsSVG(canvas, filename) {
  * 生成缩略图
  */
 export function generateThumbnail(file, maxSize = 200) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const dataURL = await readFileAsDataURL(file);
-      const img = await createImageElement(dataURL);
-      
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      
-      // 计算缩略图尺寸
-      const ratio = Math.min(maxSize / img.width, maxSize / img.height);
-      canvas.width = img.width * ratio;
-      canvas.height = img.height * ratio;
-      
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      
-      canvas.toBlob(resolve, 'image/jpeg', 0.7);
-    } catch (error) {
-      reject(error);
-    }
+  return new Promise((resolve, reject) => {
+    readFileAsDataURL(file)
+      .then(dataURL => createImageElement(dataURL))
+      .then(img => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 计算缩略图尺寸
+        const ratio = Math.min(maxSize / img.width, maxSize / img.height);
+        canvas.width = img.width * ratio;
+        canvas.height = img.height * ratio;
+        
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        
+        canvas.toBlob(resolve, 'image/jpeg', 0.7);
+      })
+      .catch(error => reject(error));
   });
 }
 

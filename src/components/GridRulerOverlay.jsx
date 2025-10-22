@@ -17,10 +17,22 @@ const GridRulerOverlay = ({
   const panY = typeof pan?.y === 'number' ? pan.y : 0;
 
   const gridBackgroundStyle = useMemo(() => {
+    console.log('🔄 GridRulerOverlay - 网格状态:', {
+      showGrid,
+      width,
+      height,
+      gridSize,
+      gridOpacity,
+      scale,
+      pan
+    });
+    
     if (!showGrid || width <= 0 || height <= 0) {
+      console.log('❌ 网格不显示 - showGrid:', showGrid, 'dimensions:', { width, height });
       return { display: 'none' };
     }
 
+    console.log('✅ 网格将显示');
     const safeScale = Math.max(scale, 0.01);
     const minorStep = Math.max(1, gridSize * safeScale);
     const majorStep = minorStep * 5;
@@ -30,10 +42,10 @@ const GridRulerOverlay = ({
     const majorOffsetX = ((panX % majorStep) + majorStep) % majorStep;
     const majorOffsetY = ((panY % majorStep) + majorStep) % majorStep;
 
-    const minorColor = `rgba(0, 0, 0, ${Math.min(gridOpacity, 1)})`;
-    const majorColor = `rgba(0, 0, 0, ${Math.min(gridOpacity * 2, 1)})`;
+    const minorColor = `rgba(0, 0, 0, ${Math.min(gridOpacity * 2, 1)})`;  // 增加透明度
+    const majorColor = `rgba(0, 0, 0, ${Math.min(gridOpacity * 4, 1)})`;  // 进一步增加主网格线的透明度
 
-    return {
+    const style = {
       backgroundImage: [
         `linear-gradient(to right, ${minorColor} 0, ${minorColor} 1px, transparent 1px, transparent 100%)`,
         `linear-gradient(to bottom, ${minorColor} 0, ${minorColor} 1px, transparent 1px, transparent 100%)`,
@@ -43,6 +55,9 @@ const GridRulerOverlay = ({
       backgroundSize: `${minorStep}px ${minorStep}px, ${minorStep}px ${minorStep}px, ${majorStep}px ${majorStep}px, ${majorStep}px ${majorStep}px`,
       backgroundPosition: `${offsetX}px 0px, 0px ${offsetY}px, ${majorOffsetX}px 0px, 0px ${majorOffsetY}px`
     };
+    
+    console.log('🎨 网格样式:', style);
+    return style;
   }, [showGrid, width, height, gridSize, gridOpacity, scale, panX, panY]);
 
   useEffect(() => {
@@ -197,7 +212,7 @@ const GridRulerOverlay = ({
 
   return (
     <div
-      className={`absolute top-0 left-0 pointer-events-none z-10 ${className || ''}`}
+      className={`absolute top-0 left-0 pointer-events-none z-50 ${className || ''}`}  // 提高z-index到50
       style={{ width, height }}
     >
       {showGrid && (

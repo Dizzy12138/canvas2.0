@@ -48,22 +48,26 @@ export function useTransform({ screenToCanvas }) {
         break;
 
       case 'scale':
-        const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-        const scale = Math.max(0.1, 1 + distance / 100 * 0.1);
-        
-        transformRef.current = {
-          ...transformState.startTransform,
-          scaleX: transformState.startTransform.scaleX * scale,
-          scaleY: transformState.startTransform.scaleY * scale
-        };
+        {
+          const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+          const scale = Math.max(0.1, 1 + distance / 100 * 0.1);
+          
+          transformRef.current = {
+            ...transformState.startTransform,
+            scaleX: transformState.startTransform.scaleX * scale,
+            scaleY: transformState.startTransform.scaleY * scale
+          };
+        }
         break;
 
       case 'rotate':
-        const angle = Math.atan2(deltaY, deltaX);
-        transformRef.current = {
-          ...transformState.startTransform,
-          rotation: transformState.startTransform.rotation + angle
-        };
+        {
+          const angle = Math.atan2(deltaY, deltaX);
+          transformRef.current = {
+            ...transformState.startTransform,
+            rotation: transformState.startTransform.rotation + angle
+          };
+        }
         break;
     }
   }, [transformState, screenToCanvas]);

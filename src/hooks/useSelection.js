@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 
 export function useSelection({ screenToCanvas, layers, activeLayerId }) {
   const [selectedObjects, setSelectedObjects] = useState([]);
@@ -24,23 +24,27 @@ export function useSelection({ screenToCanvas, layers, activeLayerId }) {
 
       case 'rectangle':
         if (object.points.length < 2) return false;
-        const [start, end] = object.points;
-        const left = Math.min(start.x, end.x);
-        const right = Math.max(start.x, end.x);
-        const top = Math.min(start.y, end.y);
-        const bottom = Math.max(start.y, end.y);
-        return point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+        {
+          const [start, end] = object.points;
+          const left = Math.min(start.x, end.x);
+          const right = Math.max(start.x, end.x);
+          const top = Math.min(start.y, end.y);
+          const bottom = Math.max(start.y, end.y);
+          return point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+        }
 
       case 'circle':
         if (object.points.length < 2) return false;
-        const [center, edge] = object.points;
-        const radius = Math.sqrt(
-          Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-        );
-        const distance = Math.sqrt(
-          Math.pow(point.x - center.x, 2) + Math.pow(point.y - center.y, 2)
-        );
-        return distance <= radius;
+        {
+          const [center, edge] = object.points;
+          const radius = Math.sqrt(
+            Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
+          );
+          const distance = Math.sqrt(
+            Math.pow(point.x - center.x, 2) + Math.pow(point.y - center.y, 2)
+          );
+          return distance <= radius;
+        }
 
       default:
         return false;
@@ -119,7 +123,7 @@ export function useSelection({ screenToCanvas, layers, activeLayerId }) {
       const deltaY = point.y - dragStart.y;
       
       // TODO: 实现对象移动逻辑
-      console.log('移动对象:', deltaX, deltaY);
+      // console.log('移动对象:', deltaX, deltaY);
     }
   }, [screenToCanvas, isSelecting, selectionBox, isDragging, dragStart, selectedObjects]);
 
