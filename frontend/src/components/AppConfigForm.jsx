@@ -321,7 +321,7 @@ const AppConfigForm = ({ workflowData, initialData, onNext, onBack }) => {
       let response;
       if (initialData?.id) {
         // 更新应用
-        response = await axios.put(`/api/apps/${initialData.id}`, appConfig);
+        response = await axios.patch(`/api/apps/${initialData.id}`, appConfig);
       } else {
         // 创建应用
         response = await axios.post('/api/apps', appConfig);
