@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import axios from 'axios';
+import apiClient from '@/api/httpClient';
 
 const initialState = {
   workflowId: null,
@@ -34,7 +34,7 @@ const useWorkflowStore = create((set, get) => ({
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await axios.post('/api/comfy/workflows', formData, {
+      const response = await apiClient.post('/comfy/workflows', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -63,7 +63,7 @@ const useWorkflowStore = create((set, get) => ({
     if (!workflowId) return null;
     set({ loading: true, error: null });
     try {
-      const response = await axios.get(`/api/comfy/workflows/${workflowId}`);
+      const response = await apiClient.get(`/comfy/workflows/${workflowId}`);
       const data = response.data?.data;
       const normalised = normaliseWorkflowResponse(data);
 
