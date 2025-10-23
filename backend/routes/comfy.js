@@ -4,7 +4,8 @@ const path = require("path");
 const fs = require("fs").promises;
 const { v4: uuidv4 } = require("uuid");
 const WorkflowService = require("../services/workflowService");
-const { WorkflowFile, App, AIService } = require("../models"); // 引入 AIService 模型
+const { App, AIService } = require("../models"); // 引入 AIService 模型
+const workflowRepository = require("../services/workflowRepository");
 const axios = require("axios");
 const { applyWorkflowParameters } = require("../utils/workflow"); // 引入现有工具函数
 
@@ -127,7 +128,7 @@ router.post('/proxy/prompt', async (req, res, next) => {
 // 获取所有工作流 (从 DB 获取)
 router.get('/workflows', async (req, res, next) => {
   try {
-    const workflows = await WorkflowFile.find({});
+    const workflows = await workflowRepository.findAll();
     res.json({ success: true, data: workflows });
   } catch (err) {
     next(err);
@@ -156,24 +157,26 @@ router.post('/workflows', uploadWorkflow.single('file'), async (req, res, next) 
 
     // 检查是否已存在相同内容的 workflow (通过 checksum)
     const checksum = require('crypto').createHash('md5').update(fileContent).digest('hex');
-    let existingWorkflow = await WorkflowFile.findOne({ checksum });
+    let existingWorkflow = await workflowRepository.findByChecksum(checksum);
 
     if (existingWorkflow) {
       // 如果存在，更新其信息或返回已存在的ID
-      existingWorkflow.name = req.file.originalname;
-      existingWorkflow.rawWorkflow = rawWorkflowData;
-      existingWorkflow.nodesTree = parsedWorkflow.nodes;
-      existingWorkflow.cascaderData = cascaderData;
-      existingWorkflow.parameters = parsedWorkflow.parameterLookup;
-      existingWorkflow.nodesCount = parsedWorkflow.nodes.length;
-      existingWorkflow.version = (existingWorkflow.version || 0) + 1; // 增加版本号
-      await existingWorkflow.save();
+      const updatedWorkflow = await workflowRepository.update(existingWorkflow._id, {
+        name: req.file.originalname,
+        rawWorkflow: rawWorkflowData,
+        nodesTree: parsedWorkflow.nodes,
+        cascaderData,
+        parameters: parsedWorkflow.parameterLookup,
+        nodesCount: parsedWorkflow.nodes.length,
+        version: (existingWorkflow.version || 0) + 1,
+      });
       await fs.unlink(req.file.path); // 删除临时文件
-      return res.status(200).json({ success: true, message: '工作流已存在，已更新', data: existingWorkflow });
+      const responseData = updatedWorkflow || { ...existingWorkflow, updatedAt: new Date() };
+      return res.status(200).json({ success: true, message: '工作流已存在，已更新', data: responseData });
     }
 
     // 保存新的工作流文件到数据库
-    const newWorkflowFile = new WorkflowFile({
+    const newWorkflowFile = await workflowRepository.create({
       checksum: checksum,
       workflowId: parsedWorkflow.workflow_id,
       name: req.file.originalname,
@@ -183,7 +186,6 @@ router.post('/workflows', uploadWorkflow.single('file'), async (req, res, next) 
       parameters: parsedWorkflow.parameterLookup,
       nodesCount: parsedWorkflow.nodes.length,
     });
-    await newWorkflowFile.save();
 
     await fs.unlink(req.file.path); // 删除临时文件
 
@@ -198,7 +200,7 @@ router.post('/workflows', uploadWorkflow.single('file'), async (req, res, next) 
 router.get('/workflows/:workflowId', async (req, res, next) => {
   try {
     const { workflowId } = req.params;
-    const workflow = await WorkflowFile.findOne({ workflowId });
+    const workflow = await workflowRepository.findByWorkflowId(workflowId);
 
     if (!workflow) {
       return res.status(404).json({ success: false, message: '工作流不存在' });
@@ -213,7 +215,7 @@ router.get('/workflows/:workflowId', async (req, res, next) => {
 router.get('/workflows/:workflowId/cascader', async (req, res, next) => {
   try {
     const { workflowId } = req.params;
-    const workflow = await WorkflowFile.findOne({ workflowId });
+    const workflow = await workflowRepository.findByWorkflowId(workflowId);
 
     if (!workflow) {
       return res.status(404).json({ success: false, message: '工作流不存在' });
@@ -235,7 +237,7 @@ router.post('/apps/:appId/run', async (req, res, next) => {
       return res.status(404).json({ success: false, message: '应用不存在' });
     }
 
-    const workflowFile = await WorkflowFile.findOne({ workflowId: app.workflowId });
+    const workflowFile = await workflowRepository.findByWorkflowId(app.workflowId);
     if (!workflowFile) {
       return res.status(404).json({ success: false, message: '关联的工作流文件不存在' });
     }
