@@ -36,6 +36,9 @@ const AppSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {}
     },
+    uiBindings: { type: mongoose.Schema.Types.Mixed, default: {} }, // 新增字段，存储画布的 UI 绑定关系
+    paramsSchema: { type: mongoose.Schema.Types.Mixed, default: {} }, // 新增字段，存储暴露给前端的参数结构
+    preferredAIServiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'AIService' }, // 新增字段，关联到 AIService 模型
     preferredServers: [{ type: String }],
     excludedServers: [{ type: String }],
     computeCost: { type: Number, default: 0 },

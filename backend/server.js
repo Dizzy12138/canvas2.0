@@ -77,7 +77,7 @@ app.use('/api/ai', authMiddleware, aiRoutes);
 // 阶段一：服务管理与代理接口先行，不强制鉴权
 app.use('/api/services', servicesRoutes);
 app.use('/api/comfy', comfyRoutes);
-app.use('/api/apps', appsRoutes); // 确保这个路由正确注册，不使用认证中间件
+app.use('/api/apps', authMiddleware, appsRoutes); // 应用相关路由，需要认证
 app.use('/api/uploads', uploadRoutes);
 
 // 健康检查

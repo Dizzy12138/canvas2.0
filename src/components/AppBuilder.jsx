@@ -1,18 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import WorkflowUploader from '@frontend/components/WorkflowUploader';
-import AppConfigForm from '@frontend/components/AppConfigForm';
-import PageBuilder from '@frontend/components/PageBuilder';
-import AppRunner from '@frontend/components/AppRunner';
-import ServiceManager from '@frontend/components/ServiceManager';
-import useTranslation from '@frontend/hooks/useTranslation';
-import { useNavigate, useParams, useLocation } from 'react-router-dom'; // 添加路由相关导入
+import WorkflowUploader from './WorkflowUploader';
+import AppConfigForm from './AppConfigForm';
+import PageBuilder from './PageBuilder';
+import AppRunner from './AppRunner';
+import ServiceManager from './ServiceManager';
+import useTranslation from '../hooks/useTranslation';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import useWorkflowStore from '../store/useWorkflowStore';
+import useAppBuilderStore from '../store/useAppBuilderStore';
 
 const AppBuilder = () => {
   const { t, changeLanguage } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const { step } = useParams();
-  
+
+  const { workflow, fetchWorkflow } = useWorkflowStore();
+  const { appId, initApp } = useAppBuilderStore();
+
   // 根据URL参数或默认值设置当前步骤
   const getCurrentStep = () => {
     if (location.pathname.includes('/app-builder/1')) return 1;
@@ -23,9 +28,6 @@ const AppBuilder = () => {
   };
 
   const [currentStep, setCurrentStep] = useState(getCurrentStep());
-  const [workflowData, setWorkflowData] = useState(null);
-  const [appConfig, setAppConfig] = useState(null);
-  const [appId, setAppId] = useState(null);
 
   // 监听路由变化并更新当前步骤
   useEffect(() => {
@@ -34,6 +36,25 @@ const AppBuilder = () => {
       setCurrentStep(newStep);
     }
   }, [location.pathname]);
+
+  // 如果有 appId，尝试加载应用数据
+  useEffect(() => {
+    const queryParams = new URLSearchParams(location.search);
+    const currentAppId = queryParams.get('appId');
+    if (currentAppId && !appId) {
+      // 假设有一个 API 来获取应用详情
+      const fetchAppDetails = async () => {
+        try {
+          const response = await axios.get(`/api/apps/${currentAppId}`);
+          initApp(response.data.data); // 初始化 AppBuilderStore
+          fetchWorkflow(response.data.data.workflowId); // 加载关联的工作流
+        } catch (error) {
+          console.error('Failed to fetch app details:', error);
+        }
+      };
+      // fetchAppDetails(); // 暂时注释，因为还没有 /api/apps/:appId 接口
+    }
+  }, [location.search, appId, initApp, fetchWorkflow]);
 
   const steps = [
     {
@@ -44,10 +65,10 @@ const AppBuilder = () => {
       title: t('appBuilder.uploadWorkflow'),
       content: (
         <WorkflowUploader 
-          onNext={(data) => {
-            setWorkflowData(data);
+          onNext={(workflowId) => {
+            // workflowId 从 useWorkflowStore 中获取
             setCurrentStep(2);
-            navigate('/app-builder/2'); // 导航到下一步
+            navigate(`/app-builder/2?workflowId=${workflowId}`); // 导航到下一步
           }} 
         />
       ),
@@ -56,17 +77,14 @@ const AppBuilder = () => {
       title: t('appBuilder.appConfig'),
       content: (
         <AppConfigForm 
-          workflowData={workflowData}
-          initialData={appConfig}
-          onNext={(data) => {
-            setAppConfig(data);
-            setAppId(data.id);
+          onNext={(newAppId) => {
+            useAppBuilderStore.getState().setAppId(newAppId); // 更新 appId
             setCurrentStep(3);
-            navigate('/app-builder/3'); // 导航到下一步
+            navigate(`/app-builder/3?appId=${newAppId}`); // 导航到下一步
           }}
           onBack={() => {
             setCurrentStep(1);
-            navigate('/app-builder/1'); // 返回上一步
+            navigate(`/app-builder/1?workflowId=${workflow?.workflow_id}`); // 返回上一步
           }}
         />
       ),
@@ -75,15 +93,13 @@ const AppBuilder = () => {
       title: t('appBuilder.pageBuilder'),
       content: (
         <PageBuilder
-          appId={appId}
-          workflowData={workflowData}
           onNext={() => {
             setCurrentStep(4);
-            navigate('/app-builder/4'); // 导航到下一步
+            navigate(`/app-builder/4?appId=${appId}`); // 导航到下一步
           }}
           onBack={() => {
             setCurrentStep(2);
-            navigate('/app-builder/2'); // 返回上一步
+            navigate(`/app-builder/2?appId=${appId}`); // 返回上一步
           }}
         />
       ),
@@ -91,7 +107,7 @@ const AppBuilder = () => {
     {
       title: t('appBuilder.runApp'),
       content: (
-        <AppRunner appId={appId} />
+        <AppRunner />
       ),
     },
   ];
@@ -99,13 +115,26 @@ const AppBuilder = () => {
   const next = () => {
     const nextStep = currentStep + 1;
     setCurrentStep(nextStep);
-    navigate(`/app-builder/${nextStep}`);
+    // 根据当前步骤和是否存在 appId/workflowId 来构建 URL
+    let newPath = `/app-builder/${nextStep}`;
+    if (nextStep === 2 && workflow?.workflow_id) {
+      newPath += `?workflowId=${workflow.workflow_id}`;
+    } else if (appId) {
+      newPath += `?appId=${appId}`;
+    }
+    navigate(newPath);
   };
 
   const prev = () => {
     const prevStep = currentStep - 1;
     setCurrentStep(prevStep);
-    navigate(`/app-builder/${prevStep}`);
+    let newPath = `/app-builder/${prevStep}`;
+    if (prevStep === 1 && workflow?.workflow_id) {
+      newPath += `?workflowId=${workflow.workflow_id}`;
+    } else if (appId) {
+      newPath += `?appId=${appId}`;
+    }
+    navigate(newPath);
   };
 
   return (

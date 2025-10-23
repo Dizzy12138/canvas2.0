@@ -1,18 +1,36 @@
-const express = require('express');
-const axios = require('axios');
-const { v4: uuidv4 } = require('uuid');
-const fs = require('fs').promises;
-const path = require('path');
-const multer = require('multer');
-const AIService = require('../models/AIService');
-const { applyWorkflowParameters } = require('../utils/workflow');
+const express = require("express");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs").promises;
+const { v4: uuidv4 } = require("uuid");
+const WorkflowService = require("../services/workflowService");
+const { WorkflowFile, App, AIService } = require("../models"); // 引入 AIService 模型
+const axios = require("axios");
+const { applyWorkflowParameters } = require("../utils/workflow"); // 引入现有工具函数
 
 const router = express.Router();
 
-// 配置文件上传
-const upload = multer({ dest: 'uploads/workflows/' });
+// 配置 multer 存储，用于工作流文件上传
+const workflowStorage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    const workflowsDir = path.join(__dirname, "../../uploads/workflows");
+    try {
+      await fs.mkdir(workflowsDir, { recursive: true });
+      cb(null, workflowsDir);
+    } catch (err) {
+      cb(err);
+    }
+  },
+  filename: (req, file, cb) => {
+    cb(null, `${uuidv4()}_${file.originalname}`);
+  },
+});
+const uploadWorkflow = multer({
+  storage: workflowStorage,
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
 
-// helper to mask
+// helper to mask (保留原有功能)
 const maskService = (s) => ({
   id: s.id,
   name: s.name,
@@ -38,7 +56,7 @@ async function resolveEndpoint(preferId) {
   throw new Error('未找到可用的服务（请设置默认或指定可用服务）');
 }
 
-// GET /api/comfy/resolve-endpoint?preferEndpointId=...
+// GET /api/comfy/resolve-endpoint?preferEndpointId=... (保留原有功能)
 router.get('/resolve-endpoint', async (req, res, next) => {
   try {
     const { prefer_endpoint_id, preferEndpointId } = req.query;
@@ -52,7 +70,7 @@ router.get('/resolve-endpoint', async (req, res, next) => {
   }
 });
 
-// POST /api/comfy/proxy/prompt { preferEndpointId?, payload }
+// POST /api/comfy/proxy/prompt { preferEndpointId?, payload } (保留原有功能，但可能被新的 /apps/:appId/run 替代部分功能)
 router.post('/proxy/prompt', async (req, res, next) => {
   try {
     const { preferEndpointId, prefer_endpoint_id, payload } = req.body || {};
@@ -75,7 +93,7 @@ router.post('/proxy/prompt', async (req, res, next) => {
       finalUrl = u.toString();
     }
 
-    // 处理工作流参数
+    // 处理工作流参数 (保留原有逻辑)
     let promptPayload = payload;
     if (payload.workflowParams && payload.workflowData) {
       promptPayload = applyWorkflowParameters(payload, payload.workflowParams, payload.workflowData);
@@ -106,227 +124,155 @@ router.post('/proxy/prompt', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// 添加工作流管理API
-// 获取工作流列表
+// 获取所有工作流 (从 DB 获取)
 router.get('/workflows', async (req, res, next) => {
   try {
-    // 创建工作流目录（如果不存在）
-    const workflowsDir = path.join(__dirname, '../../uploads/workflows');
-    try {
-      await fs.access(workflowsDir);
-    } catch {
-      await fs.mkdir(workflowsDir, { recursive: true });
-    }
-
-    // 读取工作流文件
-    const files = await fs.readdir(workflowsDir);
-    const workflows = [];
-
-    // 添加内置工作流
-    workflows.push(
-      { id: 'default', name: '默认文生图工作流', type: 'builtin', lastModified: '2024-01-15' },
-      { id: 'highres', name: '高清修复工作流', type: 'builtin', lastModified: '2024-01-10' },
-      { id: 'style-transfer', name: '风格迁移工作流', type: 'builtin', lastModified: '2024-01-12' }
-    );
-
-    // 添加自定义工作流
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        try {
-          const filePath = path.join(workflowsDir, file);
-          const stats = await fs.stat(filePath);
-          const workflowData = await fs.readFile(filePath, 'utf8');
-          const workflow = JSON.parse(workflowData);
-          
-          workflows.push({
-            id: file.replace('.json', ''),
-            name: workflow.name || file.replace('.json', ''),
-            type: 'custom',
-            lastModified: stats.mtime.toISOString().split('T')[0]
-          });
-        } catch (err) {
-          console.error('读取工作流文件失败:', file, err);
-        }
-      }
-    }
-
+    const workflows = await WorkflowFile.find({});
     res.json({ success: true, data: workflows });
   } catch (err) {
     next(err);
   }
 });
 
-// 上传工作流
-router.post('/workflows', upload.single('file'), async (req, res, next) => {
+// 上传并解析工作流
+router.post('/workflows', uploadWorkflow.single('file'), async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: '缺少文件' });
     }
 
-    // 读取上传的文件
     const fileContent = await fs.readFile(req.file.path, 'utf8');
-    let workflowData;
-    
+    let rawWorkflowData;
     try {
-      workflowData = JSON.parse(fileContent);
+      rawWorkflowData = JSON.parse(fileContent);
     } catch (parseError) {
+      await fs.unlink(req.file.path); // 删除临时文件
       return res.status(400).json({ success: false, message: '文件不是有效的JSON格式' });
     }
 
-    // 保存工作流文件
-    const workflowsDir = path.join(__dirname, '../../uploads/workflows');
-    const fileName = `${Date.now()}_${req.file.originalname}`;
-    const filePath = path.join(workflowsDir, fileName);
-    
-    await fs.writeFile(filePath, JSON.stringify(workflowData, null, 2));
+    // 使用 WorkflowService 解析工作流
+    const parsedWorkflow = WorkflowService.parseWorkflow(rawWorkflowData);
+    const cascaderData = WorkflowService.getWorkflowAsCascader(parsedWorkflow);
 
-    // 删除临时文件
-    await fs.unlink(req.file.path);
+    // 检查是否已存在相同内容的 workflow (通过 checksum)
+    const checksum = require('crypto').createHash('md5').update(fileContent).digest('hex');
+    let existingWorkflow = await WorkflowFile.findOne({ checksum });
 
-    const workflow = {
-      id: fileName.replace('.json', ''),
-      name: workflowData.name || fileName.replace('.json', ''),
-      type: 'custom',
-      lastModified: new Date().toISOString().split('T')[0]
-    };
+    if (existingWorkflow) {
+      // 如果存在，更新其信息或返回已存在的ID
+      existingWorkflow.name = req.file.originalname;
+      existingWorkflow.rawWorkflow = rawWorkflowData;
+      existingWorkflow.nodesTree = parsedWorkflow.nodes;
+      existingWorkflow.cascaderData = cascaderData;
+      existingWorkflow.version = (existingWorkflow.version || 0) + 1; // 增加版本号
+      await existingWorkflow.save();
+      await fs.unlink(req.file.path); // 删除临时文件
+      return res.status(200).json({ success: true, message: '工作流已存在，已更新', data: existingWorkflow });
+    }
 
+    // 保存新的工作流文件到数据库
+    const newWorkflowFile = new WorkflowFile({
+      checksum: checksum,
+      workflowId: parsedWorkflow.workflow_id,
+      name: req.file.originalname,
+      rawWorkflow: rawWorkflowData,
+      nodesTree: parsedWorkflow.nodes,
+      cascaderData: cascaderData,
+      nodesCount: parsedWorkflow.nodes.length,
+    });
+    await newWorkflowFile.save();
+
+    await fs.unlink(req.file.path); // 删除临时文件
+
+    res.status(201).json({ success: true, data: newWorkflowFile });
+  } catch (err) {
+    console.error('Error uploading workflow:', err);
+    next(err);
+  }
+});
+
+// 获取工作流详情 (从 DB 获取)
+router.get('/workflows/:workflowId', async (req, res, next) => {
+  try {
+    const { workflowId } = req.params;
+    const workflow = await WorkflowFile.findOne({ workflowId });
+
+    if (!workflow) {
+      return res.status(404).json({ success: false, message: '工作流不存在' });
+    }
     res.json({ success: true, data: workflow });
   } catch (err) {
     next(err);
   }
 });
 
-// 更新工作流
-router.put('/workflows/:id', async (req, res, next) => {
+// 获取工作流的 Cascader 数据
+router.get('/workflows/:workflowId/cascader', async (req, res, next) => {
   try {
-    const workflowId = req.params.id;
-    const { name, data } = req.body;
+    const { workflowId } = req.params;
+    const workflow = await WorkflowFile.findOne({ workflowId });
 
-    // 不能更新内置工作流
-    if (['default', 'highres', 'style-transfer'].includes(workflowId)) {
-      return res.status(400).json({ success: false, message: '不能更新内置工作流' });
+    if (!workflow) {
+      return res.status(404).json({ success: false, message: '工作流不存在' });
     }
-
-    // 更新自定义工作流文件
-    const workflowsDir = path.join(__dirname, '../../uploads/workflows');
-    const filePath = path.join(workflowsDir, `${workflowId}.json`);
-    
-    try {
-      // 读取现有工作流
-      const fileContent = await fs.readFile(filePath, 'utf8');
-      let workflowData = JSON.parse(fileContent);
-      
-      // 更新工作流数据
-      if (name) {
-        workflowData.name = name;
-      }
-      
-      if (data) {
-        workflowData = { ...workflowData, ...data };
-      }
-      
-      // 保存更新后的工作流
-      await fs.writeFile(filePath, JSON.stringify(workflowData, null, 2));
-      
-      const stats = await fs.stat(filePath);
-      
-      const workflow = {
-        id: workflowId,
-        name: workflowData.name || workflowId,
-        type: 'custom',
-        lastModified: stats.mtime.toISOString().split('T')[0],
-        data: workflowData
-      };
-      
-      res.json({ success: true, data: workflow });
-    } catch (err) {
-      if (err.code === 'ENOENT') {
-        return res.status(404).json({ success: false, message: '工作流不存在' });
-      } else {
-        throw err;
-      }
-    }
+    res.json({ success: true, data: workflow.cascaderData });
   } catch (err) {
     next(err);
   }
 });
 
-// 删除工作流
-router.delete('/workflows/:id', async (req, res, next) => {
+// 运行应用 (新增)
+router.post('/apps/:appId/run', async (req, res, next) => {
   try {
-    const workflowId = req.params.id;
-    
-    // 不能删除内置工作流
-    if (['default', 'highres', 'style-transfer'].includes(workflowId)) {
-      return res.status(400).json({ success: false, message: '不能删除内置工作流' });
+    const { appId } = req.params;
+    const { uiInputs } = req.body; // 前端传递的 UI 组件输入值
+
+    const app = await App.findById(appId); // 假设 App 模型有 _id
+    if (!app) {
+      return res.status(404).json({ success: false, message: '应用不存在' });
     }
 
-    // 删除自定义工作流文件
-    const workflowsDir = path.join(__dirname, '../../uploads/workflows');
-    const filePath = path.join(workflowsDir, `${workflowId}.json`);
-    
-    try {
-      await fs.unlink(filePath);
-      res.json({ success: true, message: '工作流已删除' });
-    } catch (err) {
-      if (err.code === 'ENOENT') {
-        res.status(404).json({ success: false, message: '工作流不存在' });
-      } else {
-        throw err;
-      }
+    const workflowFile = await WorkflowFile.findOne({ workflowId: app.workflowId });
+    if (!workflowFile) {
+      return res.status(404).json({ success: false, message: '关联的工作流文件不存在' });
     }
+
+    // 使用 WorkflowService 构建 ComfyUI 执行 payload
+    const comfyUIPayload = WorkflowService.constructExecutionPayload(
+      app.uiBindings, // 假设 app.uiBindings 存储了 UI 绑定关系
+      uiInputs,
+      workflowFile.rawWorkflow
+    );
+
+    // 解析 ComfyUI 服务端点
+    const { service } = await resolveEndpoint(app.preferredAIServiceId); // 假设 App 模型可以存储 preferredAIServiceId
+    const targetUrl = new URL('/prompt', service.baseUrl).toString();
+
+    const cfg = { timeout: service.timeoutMs || 60000, validateStatus: () => true, headers: {} };
+    if (service.authMethod === 'header' && service.apiKey) {
+      cfg.headers[service.apiKeyHeader || 'Authorization'] = service.apiKey;
+    }
+    let finalUrl = targetUrl;
+    if (service.authMethod === 'query' && service.apiKey) {
+      const u = new URL(finalUrl);
+      u.searchParams.set(service.apiKeyQuery || 'api_key', service.apiKey);
+      finalUrl = u.toString();
+    }
+
+    // Forward request
+    const comfyUIResponse = await axios.post(finalUrl, comfyUIPayload, cfg);
+
+    res.json({ success: true, data: comfyUIResponse.data });
   } catch (err) {
+    console.error('Error running app:', err);
     next(err);
   }
 });
 
-// 获取工作流详情
-router.get('/workflows/:id', async (req, res, next) => {
-  try {
-    const workflowId = req.params.id;
-    let workflowData = {};
-
-    // 处理内置工作流
-    if (['default', 'highres', 'style-transfer'].includes(workflowId)) {
-      workflowData = {
-        id: workflowId,
-        name: workflowId === 'default' ? '默认文生图工作流' : 
-              workflowId === 'highres' ? '高清修复工作流' : '风格迁移工作流',
-        type: 'builtin',
-        lastModified: new Date().toISOString().split('T')[0],
-        data: {} // 这里应该是实际的工作流JSON数据
-      };
-    } else {
-      // 处理自定义工作流
-      const workflowsDir = path.join(__dirname, '../../uploads/workflows');
-      const filePath = path.join(workflowsDir, `${workflowId}.json`);
-      
-      try {
-        const fileContent = await fs.readFile(filePath, 'utf8');
-        workflowData = JSON.parse(fileContent);
-        
-        const stats = await fs.stat(filePath);
-        
-        workflowData = {
-          id: workflowId,
-          name: workflowData.name || workflowId,
-          type: 'custom',
-          lastModified: stats.mtime.toISOString().split('T')[0],
-          data: workflowData
-        };
-      } catch (err) {
-        if (err.code === 'ENOENT') {
-          return res.status(404).json({ success: false, message: '工作流不存在' });
-        } else {
-          throw err;
-        }
-      }
-    }
-
-    res.json({ success: true, data: workflowData });
-  } catch (err) {
-    next(err);
-  }
-});
+// 其他 ComfyUI 相关的路由，例如更新、删除工作流等，需要根据新的数据模型进行调整。
+// 目前暂时移除，后续根据实际需求再添加或修改。
+// router.put('/workflows/:id', ...);
+// router.delete('/workflows/:id', ...);
 
 module.exports = router;
+

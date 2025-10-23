@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
 const WorkflowFileSchema = new mongoose.Schema(
   {
@@ -12,12 +12,15 @@ const WorkflowFileSchema = new mongoose.Schema(
     mappableOutputs: { type: [mongoose.Schema.Types.Mixed], default: [] },
     outputNodes: { type: [mongoose.Schema.Types.Mixed], default: [] },
     rawWorkflow: { type: mongoose.Schema.Types.Mixed },
+    nodesTree: { type: mongoose.Schema.Types.Mixed }, // 新增字段，存储解析后的节点树
+    cascaderData: { type: mongoose.Schema.Types.Mixed }, // 新增字段，存储前端 Cascader 数据
     createdBy: { type: String },
-    updatedBy: { type: String }
+    updatedBy: { type: String },
   },
   {
-    timestamps: true
+    timestamps: true,
   }
 );
 
-module.exports = mongoose.model('WorkflowFile', WorkflowFileSchema);
+module.exports = mongoose.model("WorkflowFile", WorkflowFileSchema);
+
