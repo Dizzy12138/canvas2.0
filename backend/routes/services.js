@@ -120,14 +120,23 @@ router.put('/:id', async (req, res, next) => {
       value.updatedBy = req.user.id;
     }
     
-    Object.assign(existing, value, { updatedAt: new Date() });
-    // 如果使用内存数据库，需要更新数组中的对象
-    if (global.AIService) {
-      const index = global.AIService.findIndex(s => s.id == existing.id);
+    const updates = { ...value, updatedAt: new Date() };
+
+    if (typeof existing.set === 'function') {
+      existing.set(updates);
+    } else {
+      Object.assign(existing, updates);
+    }
+
+    if (typeof existing.save === 'function') {
+      await existing.save();
+    } else if (global.AIService) {
+      const index = global.AIService.findIndex((s) => s.id == existing.id);
       if (index !== -1) {
         global.AIService[index] = existing;
       }
     }
+
     res.json({ success: true, data: maskService(existing) });
   } catch (err) { next(err); }
 });
