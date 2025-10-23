@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Rnd } from 'react-rnd';
 import { Trash2, Plus, GripVertical, Search, Filter } from 'lucide-react';
 import usePermissions from '@/hooks/usePermissions';
@@ -9,7 +9,17 @@ import ParameterCascader from '@/components/ParameterCascader';
 import axios from 'axios';
 
 // 可视化组件渲染器
-const ComponentRenderer = ({ component, isSelected, onSelect, onUpdate, onDelete, onBindParam, getBindingForComponent, workflowCascaderOptions }) => {
+const ComponentRenderer = ({
+  component,
+  isSelected,
+  onSelect,
+  onUpdate,
+  onDelete,
+  onBindParam,
+  getBindingForComponent,
+  cascaderOptions,
+  parameterSchemas,
+}) => {
   const { t } = useTranslation();
   const [localValue, setLocalValue] = useState(component.defaultProps.defaultValue);
   const [isEditing, setIsEditing] = useState(false);
@@ -26,12 +36,15 @@ const ComponentRenderer = ({ component, isSelected, onSelect, onUpdate, onDelete
 
   const handleBindChange = (path) => {
     onBindParam(component.id, path);
-    // 自动更新组件的 name 和 type
-    const [nodeName, paramKey] = path.split('.');
-    const node = workflowCascaderOptions.find(n => n.value === nodeName);
-    const param = node?.children.find(c => c.value === path);
-    if (param) {
-      onUpdate(component.id, { defaultProps: { ...component.defaultProps, title: paramKey, type: param.type } });
+    const metadata = (parameterSchemas || []).find((schema) => schema.path === path);
+    if (metadata) {
+      onUpdate(component.id, {
+        defaultProps: {
+          ...component.defaultProps,
+          title: metadata.label || metadata.name || component.defaultProps.title,
+          type: metadata.type,
+        },
+      });
     }
   };
 
@@ -113,7 +126,7 @@ const ComponentRenderer = ({ component, isSelected, onSelect, onUpdate, onDelete
             <div>
               <label className="block text-sm font-medium text-gray-700">绑定工作流参数</label>
               <ParameterCascader
-                options={workflowCascaderOptions}
+                options={cascaderOptions}
                 value={boundParamPath}
                 onChange={handleBindChange}
                 placeholder="选择要绑定的参数"
@@ -559,22 +572,49 @@ const ComponentLibrary = ({ onAddComponent }) => {
 
 const PageBuilder = ({ onNext, onBack }) => {
   const { t } = useTranslation();
-  const { 
-    appId, 
-    components, 
-    uiBindings, 
-    selectedComponent, 
-    addComponent, 
-    updateComponent, 
-    removeComponent, 
-    selectComponent, 
-    clearSelection, 
+  const {
+    appId,
+    components,
+    uiBindings,
+    paramsSchema,
+    selectedComponent,
+    addComponent,
+    updateComponent,
+    removeComponent,
+    selectComponent,
+    clearSelection,
     bindComponentToWorkflowParam,
-    unbindComponentFromWorkflowParam
+    unbindComponentFromWorkflowParam,
+    getBindingForComponent,
   } = useAppBuilderStore();
-  const { workflow, cascaderData } = useWorkflowStore();
+  const { workflowId } = useWorkflowStore();
 
   const canvasRef = useRef(null);
+
+  const cascaderOptions = useMemo(() => {
+    if (!Array.isArray(paramsSchema)) return [];
+    const grouped = new Map();
+    paramsSchema
+      .filter((param) => param.expose !== false)
+      .forEach((param) => {
+        const groupKey = param.nodeKey || param.nodeLabel || param.path.split('.')[0];
+        const groupLabel = param.nodeLabel || groupKey;
+        if (!grouped.has(groupKey)) {
+          grouped.set(groupKey, {
+            label: groupLabel,
+            value: groupKey,
+            children: [],
+          });
+        }
+        grouped.get(groupKey).children.push({
+          label: param.label || param.name || param.path,
+          value: param.path,
+          type: param.type,
+          default: param.defaultValue,
+        });
+      });
+    return Array.from(grouped.values());
+  }, [paramsSchema]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -606,7 +646,7 @@ const PageBuilder = ({ onNext, onBack }) => {
     }
   };
 
-  if (!workflow) {
+  if (!workflowId || !paramsSchema || paramsSchema.length === 0) {
     return (
       <div className="text-center text-gray-500">
         <p>请先返回到应用配置步骤，确保工作流已正确配置。</p>
@@ -652,8 +692,9 @@ const PageBuilder = ({ onNext, onBack }) => {
               onUpdate={updateComponent}
               onDelete={removeComponent}
               onBindParam={bindComponentToWorkflowParam}
-              getBindingForComponent={(id) => uiBindings[id]}
-              workflowCascaderOptions={cascaderData}
+              getBindingForComponent={getBindingForComponent}
+              cascaderOptions={cascaderOptions}
+              parameterSchemas={paramsSchema}
             />
           </Rnd>
         ))}

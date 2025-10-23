@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import WorkflowUploader from './WorkflowUploader';
 import AppConfigForm from './AppConfigForm';
 import PageBuilder from './PageBuilder';
@@ -15,7 +16,7 @@ const AppBuilder = () => {
   const location = useLocation();
   const { step } = useParams();
 
-  const { workflow, fetchWorkflow } = useWorkflowStore();
+  const { workflowId, fetchWorkflow } = useWorkflowStore();
   const { appId, initApp } = useAppBuilderStore();
 
   // 根据URL参数或默认值设置当前步骤
@@ -84,7 +85,7 @@ const AppBuilder = () => {
           }}
           onBack={() => {
             setCurrentStep(1);
-            navigate(`/app-builder/1?workflowId=${workflow?.workflow_id}`); // 返回上一步
+            navigate(`/app-builder/1?workflowId=${workflowId || ''}`); // 返回上一步
           }}
         />
       ),
@@ -117,8 +118,8 @@ const AppBuilder = () => {
     setCurrentStep(nextStep);
     // 根据当前步骤和是否存在 appId/workflowId 来构建 URL
     let newPath = `/app-builder/${nextStep}`;
-    if (nextStep === 2 && workflow?.workflow_id) {
-      newPath += `?workflowId=${workflow.workflow_id}`;
+    if (nextStep === 2 && workflowId) {
+      newPath += `?workflowId=${workflowId}`;
     } else if (appId) {
       newPath += `?appId=${appId}`;
     }
@@ -129,8 +130,8 @@ const AppBuilder = () => {
     const prevStep = currentStep - 1;
     setCurrentStep(prevStep);
     let newPath = `/app-builder/${prevStep}`;
-    if (prevStep === 1 && workflow?.workflow_id) {
-      newPath += `?workflowId=${workflow.workflow_id}`;
+    if (prevStep === 1 && workflowId) {
+      newPath += `?workflowId=${workflowId}`;
     } else if (appId) {
       newPath += `?appId=${appId}`;
     }

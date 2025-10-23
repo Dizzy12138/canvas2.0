@@ -164,6 +164,8 @@ router.post('/workflows', uploadWorkflow.single('file'), async (req, res, next) 
       existingWorkflow.rawWorkflow = rawWorkflowData;
       existingWorkflow.nodesTree = parsedWorkflow.nodes;
       existingWorkflow.cascaderData = cascaderData;
+      existingWorkflow.parameters = parsedWorkflow.parameterLookup;
+      existingWorkflow.nodesCount = parsedWorkflow.nodes.length;
       existingWorkflow.version = (existingWorkflow.version || 0) + 1; // 增加版本号
       await existingWorkflow.save();
       await fs.unlink(req.file.path); // 删除临时文件
@@ -178,6 +180,7 @@ router.post('/workflows', uploadWorkflow.single('file'), async (req, res, next) 
       rawWorkflow: rawWorkflowData,
       nodesTree: parsedWorkflow.nodes,
       cascaderData: cascaderData,
+      parameters: parsedWorkflow.parameterLookup,
       nodesCount: parsedWorkflow.nodes.length,
     });
     await newWorkflowFile.save();
@@ -239,9 +242,9 @@ router.post('/apps/:appId/run', async (req, res, next) => {
 
     // 使用 WorkflowService 构建 ComfyUI 执行 payload
     const comfyUIPayload = WorkflowService.constructExecutionPayload(
-      app.uiBindings, // 假设 app.uiBindings 存储了 UI 绑定关系
+      app.uiBindings,
       uiInputs,
-      workflowFile.rawWorkflow
+      workflowFile
     );
 
     // 解析 ComfyUI 服务端点

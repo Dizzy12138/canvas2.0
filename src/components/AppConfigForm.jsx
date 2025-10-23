@@ -1,19 +1,31 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import useWorkflowStore from "@/store/useWorkflowStore";
-import useAppBuilderStore from "@/store/useAppBuilderStore";
-import ParameterCascader from "@/components/ParameterCascader";
-import useTranslation from "@/hooks/useTranslation";
+import useWorkflowStore from '@/store/useWorkflowStore';
+import useAppBuilderStore from '@/store/useAppBuilderStore';
+import ParameterCascader from '@/components/ParameterCascader';
+import useTranslation from '@/hooks/useTranslation';
 
 const AppConfigForm = ({ onNext, onBack }) => {
   const { t } = useTranslation();
-  const { workflow, loading: workflowLoading } = useWorkflowStore();
-  const { appId, appName, paramsSchema, setParamsSchema, initApp } = useAppBuilderStore();
+  const {
+    workflowId,
+    cascaderData,
+    parameterLookup,
+    loading: workflowLoading,
+  } = useWorkflowStore();
+  const {
+    appId,
+    appName,
+    paramsSchema,
+    setParamsSchema,
+    initApp,
+    setAppName,
+  } = useAppBuilderStore();
 
   const [formData, setFormData] = useState({
     name: appName || '',
   });
-  const [exposedParams, setExposedParams] = useState(paramsSchema || []); // [ { path: 'KSampler.cfg', name: 'cfg', type: 'float' } ]
+  const [exposedParams, setExposedParams] = useState(paramsSchema || []);
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -26,15 +38,38 @@ const AppConfigForm = ({ onNext, onBack }) => {
     }
   }, [appName, paramsSchema]);
 
+  const cascaderOptions = useMemo(() => cascaderData || [], [cascaderData]);
+
+  const findParamMetadata = (path) => {
+    if (!path) return null;
+    return parameterLookup?.[path] || null;
+  };
+
   const handleInputChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    if (field === 'name') {
+      setAppName(value);
+    }
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
     }
   };
 
   const addExposedParam = () => {
-    setExposedParams([...exposedParams, { id: `param_${Date.now()}`, path: '', name: '', type: '' }]);
+    setExposedParams([
+      ...exposedParams,
+      {
+        id: `param_${Date.now()}`,
+        path: '',
+        name: '',
+        label: '',
+        type: 'string',
+        defaultValue: '',
+        nodeLabel: '',
+        nodeId: null,
+        expose: true,
+      },
+    ]);
   };
 
   const removeExposedParam = (id) => {
@@ -42,25 +77,85 @@ const AppConfigForm = ({ onNext, onBack }) => {
   };
 
   const updateExposedParam = (id, newPath) => {
-    const [nodeName, paramKey] = newPath.split('.');
-    // Find param details from cascaderData
-    const node = workflow.cascaderData.find(n => n.value === nodeName);
-    const param = node?.children.find(c => c.value === newPath);
+    const metadata = findParamMetadata(newPath);
+    setExposedParams(exposedParams.map((param) => {
+      if (param.id !== id) return param;
 
-    setExposedParams(exposedParams.map(p => 
-      p.id === id 
-        ? { ...p, path: newPath, name: paramKey, type: param?.type || 'unknown' } 
-        : p
-    ));
+      if (!metadata) {
+        return {
+          ...param,
+          path: newPath,
+          name: newPath?.split('.')?.[1] || newPath,
+          label: newPath,
+          type: 'unknown',
+          defaultValue: '',
+          nodeLabel: newPath?.split('.')?.[0] || '',
+          nodeKey: newPath?.split('.')?.[0] || '',
+          nodeId: null,
+          invalid: true,
+        };
+      }
+
+      return {
+        ...param,
+        path: newPath,
+        name: metadata.paramKey || metadata.label || metadata.port || metadata.paramKey,
+        label: metadata.label || metadata.port || metadata.paramKey,
+        type: metadata.type || 'string',
+        defaultValue: metadata.default,
+        nodeLabel: metadata.nodeLabel,
+        nodeKey: metadata.nodeKey,
+        nodeId: metadata.nodeId,
+        invalid: false,
+      };
+    }));
+  };
+
+  const updateDefaultValue = (id, value) => {
+    setExposedParams((prev) =>
+      prev.map((param) =>
+        param.id === id
+          ? { ...param, defaultValue: value }
+          : param,
+      ),
+    );
+  };
+
+  const toggleExpose = (id) => {
+    setExposedParams((prev) =>
+      prev.map((param) =>
+        param.id === id
+          ? { ...param, expose: !param.expose }
+          : param,
+      ),
+    );
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     const newErrors = {};
     if (!formData.name) newErrors.name = '请输入应用名称';
-    if (exposedParams.length === 0 || exposedParams.some(p => !p.path)) {
+
+    const activeParams = exposedParams.filter((param) => param.expose !== false);
+
+    if (
+      activeParams.length === 0 ||
+      activeParams.some((p) => !p.path || p.invalid)
+    ) {
       newErrors.params = '请至少暴露一个有效的参数';
     }
+
+    const duplicatePaths = new Set();
+    const duplicated = activeParams.some((param) => {
+      if (duplicatePaths.has(param.path)) return true;
+      duplicatePaths.add(param.path);
+      return false;
+    });
+
+    if (duplicated) {
+      newErrors.params = '同一个工作流参数只能绑定一次';
+    }
+
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
@@ -69,11 +164,23 @@ const AppConfigForm = ({ onNext, onBack }) => {
     setIsSubmitting(true);
     setErrors({});
 
+    const paramsPayload = exposedParams.map((param) => ({
+      id: param.id,
+      path: param.path,
+      name: param.name,
+      label: param.label,
+      type: param.type,
+      defaultValue: param.defaultValue,
+      nodeId: param.nodeId,
+      nodeKey: param.nodeKey,
+      nodeLabel: param.nodeLabel,
+      expose: param.expose !== false,
+    }));
+
     const appConfig = {
       name: formData.name,
-      workflowId: workflow.workflow_id,
-      paramsSchema: exposedParams,
-      // The uiBindings will be handled in the PageBuilder
+      workflowId: workflowId,
+      paramsSchema: paramsPayload,
     };
 
     try {
@@ -87,6 +194,7 @@ const AppConfigForm = ({ onNext, onBack }) => {
       }
       const savedApp = response.data.data;
       initApp(savedApp); // Update the store with the saved app data
+      setParamsSchema(paramsPayload);
       onNext(savedApp._id);
     } catch (error) {
       console.error('Failed to save app configuration:', error);
@@ -100,7 +208,7 @@ const AppConfigForm = ({ onNext, onBack }) => {
     return <div>加载工作流数据中...</div>;
   }
 
-  if (!workflow) {
+  if (!workflowId) {
     return (
       <div className="text-center text-gray-500">
         <p>请先返回上一步上传并解析一个工作流。</p>
@@ -125,27 +233,84 @@ const AppConfigForm = ({ onNext, onBack }) => {
 
       <div className="space-y-4">
         <h3 className="text-md font-medium text-gray-900">暴露给前端的参数</h3>
-        {exposedParams.map((param, index) => (
-          <div key={param.id} className="flex items-center space-x-4 p-4 border rounded-md">
-            <div className="flex-grow">
-              <label className="block text-sm font-medium text-gray-500">绑定工作流参数</label>
-              <ParameterCascader
-                options={workflow.cascaderData || []}
-                value={param.path}
-                onChange={(path) => updateExposedParam(param.id, path)}
-              />
+        {exposedParams.map((param) => {
+          const metadata = findParamMetadata(param.path);
+          const isInvalid = param.invalid || (!param.path && param.expose !== false);
+          return (
+            <div
+              key={param.id}
+              className={`space-y-3 p-4 border rounded-md ${isInvalid ? 'border-red-300 bg-red-50/40' : 'border-gray-200'}`}
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-500">绑定工作流参数</label>
+                  <ParameterCascader
+                    options={cascaderOptions}
+                    value={param.path}
+                    onChange={(path) => updateExposedParam(param.id, path)}
+                  />
+                  {metadata?.nodeLabel && (
+                    <p className="mt-1 text-xs text-gray-500">绑定路径: {metadata.nodeLabel}.{metadata.paramKey}</p>
+                  )}
+                </div>
+                <div className="w-40">
+                  <label className="block text-sm font-medium text-gray-500">参数类型</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={param.type || metadata?.type || 'N/A'}
+                    className="mt-1 block w-full px-3 py-2 bg-gray-100 border border-gray-300 rounded-md shadow-sm sm:text-sm"
+                  />
+                </div>
+                <div className="w-40">
+                  <label className="block text-sm font-medium text-gray-500">默认值</label>
+                  {param.type === 'boolean' ? (
+                    <div className="mt-2 flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(param.defaultValue)}
+                        onChange={(e) => updateDefaultValue(param.id, e.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      <span className="text-xs text-gray-500">{Boolean(param.defaultValue) ? '开启' : '关闭'}</span>
+                    </div>
+                  ) : (
+                    <input
+                      type={param.type === 'number' ? 'number' : 'text'}
+                      value={param.defaultValue ?? ''}
+                      onChange={(e) => {
+                        const value = param.type === 'number' ? Number(e.target.value) : e.target.value;
+                        updateDefaultValue(param.id, value);
+                      }}
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm sm:text-sm"
+                    />
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <label className="flex items-center text-sm text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={param.expose !== false}
+                    onChange={() => toggleExpose(param.id)}
+                    className="mr-2"
+                  />
+                  是否前端暴露
+                </label>
+                <button
+                  type="button"
+                  onClick={() => removeExposedParam(param.id)}
+                  className="text-sm text-red-600 hover:text-red-800"
+                >
+                  删除
+                </button>
+              </div>
+              {isInvalid && (
+                <p className="text-sm text-red-600">请选择有效的工作流参数</p>
+              )}
             </div>
-            <div className="w-1/4">
-                <label className="block text-sm font-medium text-gray-500">参数类型</label>
-                <input type="text" readOnly value={param.type || 'N/A'} className="mt-1 block w-full px-3 py-2 bg-gray-100 border border-gray-300 rounded-md shadow-sm sm:text-sm" />
-            </div>
-            <div className="pt-5">
-              <button type="button" onClick={() => removeExposedParam(param.id)} className="text-red-600 hover:text-red-800">
-                删除
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {errors.params && <p className="mt-2 text-sm text-red-600">{errors.params}</p>}
         <button
           type="button"
