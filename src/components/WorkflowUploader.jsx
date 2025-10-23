@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import useWorkflowStore from '../store/useWorkflowStore';
+import useAppBuilderStore from '../store/useAppBuilderStore';
 
 const WorkflowUploader = ({ onNext }) => {
   const [file, setFile] = useState(null);
-  const { uploadWorkflow, loading, error, workflow } = useWorkflowStore();
+  const { uploadWorkflow, loading, error, workflowId, nodesTree } = useWorkflowStore();
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
@@ -57,6 +58,10 @@ const WorkflowUploader = ({ onNext }) => {
     }
     try {
       const uploadedWorkflow = await uploadWorkflow(file);
+      if (uploadedWorkflow) {
+        const { setWorkflowId } = useAppBuilderStore.getState();
+        setWorkflowId(uploadedWorkflow.workflowId);
+      }
       if (uploadedWorkflow && onNext) {
         onNext(uploadedWorkflow.workflowId);
       }
@@ -78,8 +83,8 @@ const WorkflowUploader = ({ onNext }) => {
       <div className="mb-6">
         <div 
           className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-            workflow 
-              ? 'border-green-500 bg-green-50' 
+            workflowId
+              ? 'border-green-500 bg-green-50'
               : 'border-gray-300 hover:border-blue-500 bg-gray-50 hover:bg-blue-50'
           }`}
           onDrop={handleDrop}
@@ -95,7 +100,7 @@ const WorkflowUploader = ({ onNext }) => {
           />
           
           <div className="flex flex-col items-center justify-center">
-            {workflow ? (
+            {workflowId ? (
               <>
                 <svg className="w-12 h-12 text-green-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
@@ -103,7 +108,7 @@ const WorkflowUploader = ({ onNext }) => {
                 <p className="text-lg font-medium text-green-700">{file?.name}</p>
                 <p className="text-sm text-green-600">文件上传成功</p>
                 <p className="text-sm text-blue-600 mt-2">
-                  检测到 {workflow.nodesTree?.length || 0} 个节点
+                  检测到 {(nodesTree && nodesTree.length) || 0} 个节点
                 </p>
               </>
             ) : (
@@ -120,7 +125,7 @@ const WorkflowUploader = ({ onNext }) => {
           </div>
         </div>
         
-        {file && !workflow && (
+        {file && !workflowId && (
           <div className="mt-2 flex justify-center">
             <button
               onClick={handleRemove}
@@ -139,8 +144,8 @@ const WorkflowUploader = ({ onNext }) => {
       </div>
       
       <div className="flex justify-end">
-        <button 
-          onClick={workflow ? () => onNext(workflow.workflow_id) : handleUpload} 
+        <button
+          onClick={workflowId ? () => onNext(workflowId) : handleUpload}
           disabled={!file || loading}
           className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
             !file || loading
@@ -154,9 +159,9 @@ const WorkflowUploader = ({ onNext }) => {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
-              {workflow ? '处理中...' : '解析中...'}
+              {workflowId ? '处理中...' : '解析中...'}
             </>
-          ) : workflow ? (
+          ) : workflowId ? (
             '下一步'
           ) : (
             '解析工作流'

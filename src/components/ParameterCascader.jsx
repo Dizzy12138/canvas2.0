@@ -40,10 +40,20 @@ const ParameterCascader = ({ options, value, onChange, placeholder = '请选择�
     }
   };
 
+  const matchesSearch = (option) => {
+    if (!searchValue) return true;
+    const keyword = searchValue.toLowerCase();
+    if ((option.label || '').toLowerCase().includes(keyword)) {
+      return true;
+    }
+    if (Array.isArray(option.children)) {
+      return option.children.some(matchesSearch);
+    }
+    return false;
+  };
+
   const renderOptions = (currentOptions, level) => {
-    const filteredOptions = currentOptions.filter(option => 
-      option.label.toLowerCase().includes(searchValue.toLowerCase())
-    );
+    const filteredOptions = currentOptions.filter(matchesSearch);
 
     return (
       <ul className="min-w-[150px] max-h-60 overflow-y-auto bg-white border-r border-gray-200 py-1 shadow-sm">
