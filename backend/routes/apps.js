@@ -1,12 +1,27 @@
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
-
 const App = require('../models/App');
 const ExecutionHistory = require('../models/ExecutionHistory');
 const { sendError } = require('../utils/errorHandler');
-const { acquireConcurrency, releaseConcurrency, checkRateLimit } = require('../utils/resourceManager');
 
 const router = express.Router();
+
+// 检查应用名称是否存在
+router.get('/check-name', async (req, res, next) => {
+  try {
+    const { name, excludeId } = req.query;
+    if (!name) {
+      return sendError(res, 400, '400_INVALID_REQUEST', '缺少应用名称');
+    }
+    const query = { name };
+    if (excludeId) {
+      query._id = { $ne: excludeId };
+    }
+    const existingApp = await App.findOne(query);
+    res.json({ success: true, exists: !!existingApp });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // 创建应用
 router.post('/', async (req, res, next) => {
@@ -113,24 +128,6 @@ router.get('/:appId/page', async (req, res, next) => {
     }
     // 返回前端构建页面所需的数据
     res.json({ success: true, data: { components: app.components || [], uiBindings: app.uiBindings || [] } });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// 检查应用名称是否存在
-router.get('/check-name', async (req, res, next) => {
-  try {
-    const { name, excludeId } = req.query;
-    if (!name) {
-      return sendError(res, 400, '400_INVALID_REQUEST', '缺少应用名称');
-    }
-    const query = { name };
-    if (excludeId) {
-      query._id = { $ne: excludeId };
-    }
-    const existingApp = await App.findOne(query);
-    res.json({ success: true, exists: !!existingApp });
   } catch (err) {
     next(err);
   }

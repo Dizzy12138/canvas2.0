@@ -74,8 +74,7 @@ app.use('/api/users', authMiddleware, userRoutes);
 app.use('/api/projects', authMiddleware, projectRoutes);
 app.use('/api/files', authMiddleware, fileRoutes);
 app.use('/api/ai', authMiddleware, aiRoutes);
-// 阶段一：服务管理与代理接口先行，不强制鉴权
-app.use('/api/services', servicesRoutes);
+app.use('/api/services', authMiddleware, servicesRoutes);
 app.use('/api/comfy', comfyRoutes);
 app.use('/api/apps', authMiddleware, appsRoutes); // 应用相关路由，需要认证
 app.use('/api/uploads', uploadRoutes);
