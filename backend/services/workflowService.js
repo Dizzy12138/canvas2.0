@@ -1,164 +1,356 @@
-const { WorkflowFile } = require('../models');
 const { v4: uuidv4 } = require('uuid');
 
+const sanitizeKeyPart = (value, fallback) => {
+  if (!value && fallback) {
+    return sanitizeKeyPart(fallback);
+  }
+  const cleaned = (value || '')
+    .toString()
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_]+/g, '');
+
+  if (cleaned) {
+    return cleaned;
+  }
+
+  return fallback ? sanitizeKeyPart(fallback) : '';
+};
+
+const inferType = (typeHint, value) => {
+  const hint = (typeHint || '').toString().toLowerCase();
+  if (hint.includes('float') || hint.includes('int') || hint.includes('number')) {
+    return 'number';
+  }
+  if (hint.includes('bool')) {
+    return 'boolean';
+  }
+  if (hint.includes('image')) {
+    return 'image';
+  }
+  if (hint.includes('tensor')) {
+    return 'tensor';
+  }
+  if (hint.includes('conditioning')) {
+    return 'conditioning';
+  }
+  if (hint.includes('string') || hint.includes('text')) {
+    return 'string';
+  }
+  if (hint.includes('model')) {
+    return 'model';
+  }
+  if (hint.includes('latent')) {
+    return 'latent';
+  }
+
+  if (typeof value === 'number') return 'number';
+  if (typeof value === 'boolean') return 'boolean';
+  if (Array.isArray(value)) return 'array';
+  if (value && typeof value === 'object') return 'object';
+
+  return 'string';
+};
+
+const asNodeArray = (jsonContent) => {
+  if (!jsonContent) return [];
+  if (Array.isArray(jsonContent.nodes)) {
+    return jsonContent.nodes;
+  }
+  if (jsonContent.nodes && typeof jsonContent.nodes === 'object') {
+    return Object.values(jsonContent.nodes);
+  }
+  return [];
+};
+
+const cloneWorkflow = (workflow) => {
+  if (!workflow) return {};
+  return JSON.parse(JSON.stringify(workflow));
+};
+
+const findNodeById = (workflow, nodeId) => {
+  if (!workflow || !workflow.nodes) return null;
+  if (Array.isArray(workflow.nodes)) {
+    return workflow.nodes.find((node) => Number(node?.id) === Number(nodeId));
+  }
+  return (
+    workflow.nodes[nodeId] ||
+    workflow.nodes[String(nodeId)] ||
+    null
+  );
+};
+
+const normaliseBindings = (bindings = []) => {
+  if (Array.isArray(bindings)) {
+    return bindings
+      .filter((binding) => binding && binding.componentId && binding.bindTo)
+      .map((binding) => ({
+        componentId: binding.componentId,
+        bindTo: binding.bindTo,
+      }));
+  }
+
+  return Object.entries(bindings || {})
+    .filter(([componentId, bindTo]) => componentId && bindTo)
+    .map(([componentId, bindTo]) => ({ componentId, bindTo }));
+};
+
 class WorkflowService {
+  static parseWorkflow(jsonContent) {
+    if (!jsonContent) {
+      throw new Error('Invalid ComfyUI workflow JSON format.');
+    }
 
-    /**
-     * 解析 ComfyUI 工作流 JSON 文件，生成标准化节点参数树。
-     * @param {object} jsonContent - ComfyUI 工作流的 JSON 内容。
-     * @returns {object} - 包含 workflow_id 和标准化节点信息的对象。
-     */
-    static parseWorkflow(jsonContent) {
-        if (!jsonContent || !jsonContent.nodes) {
-            throw new Error('Invalid ComfyUI workflow JSON format.');
-        }
+    const workflowId = jsonContent.workflow_id || uuidv4();
+    const nodesArray = asNodeArray(jsonContent);
+    const nodeKeyTracker = {};
+    const parameterLookup = {};
 
-        const workflowId = uuidv4(); // 为每个工作流生成唯一ID
-        const nodes = [];
+    const nodes = nodesArray.map((node) => {
+      if (!node || typeof node !== 'object') {
+        return null;
+      }
 
-        // 遍历 ComfyUI 的节点，提取所需信息
-        for (const nodeId in jsonContent.nodes) {
-            const node = jsonContent.nodes[nodeId];
-            const inputs = [];
-            const outputs = [];
+      const numericId = Number(node.id ?? node.ID ?? node.uid);
+      const nodeId = Number.isNaN(numericId) ? null : numericId;
+      const fallbackName = node.type || node.class_type || `node_${nodeId ?? ''}`;
+      const displayName = node.title || node.properties?.['Node name for S&R'] || fallbackName;
+      const baseKey = sanitizeKeyPart(displayName, fallbackName) || `node_${nodeId ?? ''}`;
+      const counter = (nodeKeyTracker[baseKey] || 0) + 1;
+      nodeKeyTracker[baseKey] = counter;
+      const nodeKey = counter === 1 ? baseKey : `${baseKey}_${counter}`;
 
-            // 提取输入参数
-            if (node.inputs) {
-                for (const input of node.inputs) {
-                    // 尝试从 ComfyUI 节点结构中提取类型和默认值
-                    // 这里的逻辑可能需要根据实际的 ComfyUI JSON 结构进行调整和完善
-                    // 假设输入参数的类型和默认值可以在这里直接获取或推断
-                    inputs.push({
-                        key: input.name,
-                        type: input.type || 'string', // 默认string，实际应更精确推断
-                        default: input.default || null // 尝试获取默认值
-                    });
-                }
-            }
-            
-            // 提取输出参数
-            if (node.outputs) {
-                for (const output of node.outputs) {
-                    outputs.push({
-                        key: output.name,
-                        type: output.type || 'string' // 默认string
-                    });
-                }
-            }
+      const inputs = [];
 
-            nodes.push({
-                id: parseInt(nodeId), // ComfyUI 的节点ID通常是数字字符串
-                name: node.type, // 使用 ComfyUI 的节点类型作为名称
-                type: node.class_type || 'unknown', // 节点的类类型
-                inputs: inputs,
-                outputs: outputs
-            });
-        }
+      const widgetValues = Array.isArray(node.widgets_values) ? node.widgets_values : [];
+      const widgetDefs = Array.isArray(node.widgets) ? node.widgets : [];
+      widgetValues.forEach((value, index) => {
+        const widgetInfo = widgetDefs[index];
+        const widgetName = Array.isArray(widgetInfo)
+          ? widgetInfo[0]
+          : widgetInfo?.name;
+        const widgetType = Array.isArray(widgetInfo)
+          ? widgetInfo[1]
+          : widgetInfo?.type;
+        const label = widgetName || `参数${index + 1}`;
+        const paramKey = sanitizeKeyPart(widgetName, `widget_${index + 1}`);
+        const bindPath = `${nodeKey}.${paramKey}`;
+        const type = inferType(widgetType, value);
 
-        return {
-            workflow_id: workflowId,
-            nodes: nodes
+        parameterLookup[bindPath] = {
+          nodeId,
+          nodeKey,
+          nodeLabel: displayName,
+          paramKey,
+          label,
+          type,
+          default: value,
+          source: 'widget',
+          widgetIndex: index,
         };
+
+        inputs.push({
+          id: `${nodeId ?? nodeKey}_widget_${index}`,
+          key: paramKey,
+          label,
+          type,
+          default: value,
+          path: bindPath,
+          source: 'widget',
+          widgetIndex: index,
+        });
+      });
+
+      if (Array.isArray(node.inputs)) {
+        node.inputs.forEach((input, index) => {
+          if (!input || typeof input !== 'object') return;
+          const hasLink = input.link !== undefined && input.link !== null;
+          const hasLinksArray = Array.isArray(input.links) && input.links.length > 0;
+          const defaultValue = input.value ?? input.default ?? null;
+          if ((hasLink || hasLinksArray) && defaultValue === null) {
+            return; // 已连接到其他节点且无默认值，不暴露
+          }
+
+          const label = input.name || `输入${index + 1}`;
+          const paramKey = sanitizeKeyPart(label, `input_${index + 1}`);
+          const bindPath = `${nodeKey}.${paramKey}`;
+          const type = inferType(input.type, defaultValue);
+
+          parameterLookup[bindPath] = {
+            nodeId,
+            nodeKey,
+            nodeLabel: displayName,
+            paramKey,
+            label,
+            type,
+            default: defaultValue,
+            source: 'input',
+            inputIndex: index,
+            originalName: input.name,
+          };
+
+          inputs.push({
+            id: `${nodeId ?? nodeKey}_input_${index}`,
+            key: paramKey,
+            label,
+            type,
+            default: defaultValue,
+            path: bindPath,
+            source: 'input',
+            inputIndex: index,
+            originalName: input.name,
+          });
+        });
+      } else if (node.inputs && typeof node.inputs === 'object') {
+        Object.entries(node.inputs).forEach(([key, value], index) => {
+          const paramKey = sanitizeKeyPart(key, `input_${index + 1}`);
+          const bindPath = `${nodeKey}.${paramKey}`;
+          const type = inferType(null, value);
+
+          parameterLookup[bindPath] = {
+            nodeId,
+            nodeKey,
+            nodeLabel: displayName,
+            paramKey,
+            label: key,
+            type,
+            default: value,
+            source: 'input-object',
+            originalName: key,
+          };
+
+          inputs.push({
+            id: `${nodeId ?? nodeKey}_input_obj_${index}`,
+            key: paramKey,
+            label: key,
+            type,
+            default: value,
+            path: bindPath,
+            source: 'input-object',
+            originalName: key,
+          });
+        });
+      }
+
+      const outputs = [];
+      if (Array.isArray(node.outputs)) {
+        node.outputs.forEach((output, index) => {
+          outputs.push({
+            key: output?.name || `output_${index + 1}`,
+            type: output?.type || 'any',
+          });
+        });
+      }
+
+      return {
+        id: nodeId,
+        name: displayName,
+        type: node.type || node.class_type || 'unknown',
+        key: nodeKey,
+        inputs,
+        outputs,
+      };
+    }).filter(Boolean);
+
+    return {
+      workflow_id: workflowId,
+      nodes,
+      parameterLookup,
+    };
+  }
+
+  static getWorkflowAsCascader(workflowData) {
+    if (!workflowData || !workflowData.nodes) {
+      return [];
     }
 
-    /**
-     * 根据解析后的工作流数据，生成前端所需的树形下拉选择器（Cascader）数据结构。
-     * @param {object} workflowData - parseWorkflow 返回的标准化工作流数据。
-     * @returns {Array<object>} - Cascader 格式的数据数组。
-     */
-    static getWorkflowAsCascader(workflowData) {
-        if (!workflowData || !workflowData.nodes) {
-            return [];
-        }
+    return workflowData.nodes
+      .filter((node) => Array.isArray(node.inputs) && node.inputs.length > 0)
+      .map((node) => ({
+        label: node.name,
+        value: node.key,
+        children: node.inputs.map((input) => ({
+          label: input.label || input.key,
+          value: input.path,
+          type: input.type,
+          default: input.default,
+          nodeId: node.id,
+          nodeKey: node.key,
+        })),
+      }));
+  }
 
-        const cascaderData = [];
-        for (const node of workflowData.nodes) {
-            const children = [];
-            for (const input of node.inputs) {
-                children.push({
-                    label: input.key,
-                    value: `${node.name}.${input.key}`,
-                    type: input.type,
-                    default: input.default
-                });
-            }
-            // 也可以考虑将输出参数添加到可绑定项，如果业务需要的话
-            // for (const output of node.outputs) {
-            //     children.push({
-            //         label: output.key,
-            //         value: `${node.name}.${output.key}`,
-            //         type: output.type
-            //     });
-            // }
-
-            if (children.length > 0) {
-                cascaderData.push({
-                    label: node.name,
-                    value: node.name,
-                    children: children
-                });
-            }
-        }
-        return cascaderData;
+  static constructExecutionPayload(appBindings, uiInputs, workflowFile) {
+    if (!workflowFile) {
+      throw new Error('workflowFile is required to construct payload');
     }
 
-    /**
-     * 根据前端 UI 绑定和用户输入，构建 ComfyUI 执行所需的 payload。
-     * @param {Array<object>} uiBindings - 前端 UI 组件与工作流参数的绑定关系，例如：`[{ component_id: 'slider_cfg', bind_to: 'KSampler.cfg' }]`。
-     * @param {object} formInputs - 前端用户输入值，例如：`{ slider_cfg: 8.0, input_prompt: 'a cat' }`。
-     * @param {object} originalWorkflowJson - 原始的 ComfyUI 工作流 JSON。
-     * @returns {object} - 动态构造的 ComfyUI payload。
-     */
-    static constructExecutionPayload(uiBindings, formInputs, originalWorkflowJson) {
-        if (!originalWorkflowJson || !originalWorkflowJson.nodes) {
-            throw new Error('Original ComfyUI workflow JSON is required.');
-        }
+    const rawWorkflow = cloneWorkflow(workflowFile.rawWorkflow);
+    const workflowId = workflowFile.workflowId || workflowFile.workflow_id || uuidv4();
+    const parameters = workflowFile.parameters || workflowFile.parameterLookup || {};
+    const bindings = normaliseBindings(appBindings);
 
-        const payload = { ...originalWorkflowJson }; // 复制原始工作流以进行修改
-        payload.inputs = {}; // 用于存储前端注入的参数
+    const valuesByPath = {};
 
-        for (const binding of uiBindings) {
-            const { component_id, bind_to } = binding;
-            const inputValue = formInputs[component_id];
-
-            if (inputValue !== undefined) {
-                // bind_to 格式为 'NodeName.ParamKey'
-                const [nodeName, paramKey] = bind_to.split('.');
-
-                // 查找原始工作流中的对应节点和参数，并注入值
-                // 注意：ComfyUI 的节点ID是数字字符串，这里需要根据nodeName找到对应的nodeId
-                // 这是一个简化的查找逻辑，可能需要更健壮的映射机制
-                let targetNodeId = null;
-                for (const id in originalWorkflowJson.nodes) {
-                    if (originalWorkflowJson.nodes[id].type === nodeName) {
-                        targetNodeId = id;
-                        break;
-                    }
-                }
-
-                if (targetNodeId) {
-                    const node = payload.nodes[targetNodeId];
-                    if (node && node.inputs) {
-                        for (let i = 0; i < node.inputs.length; i++) {
-                            if (node.inputs[i].name === paramKey) {
-                                // 假设 ComfyUI 的输入是数组形式，直接替换值
-                                // 实际情况可能更复杂，例如某些输入是连接到其他节点，某些是直接值
-                                // 这里需要根据 ComfyUI 的实际 API 结构进行精确适配
-                                node.inputs[i].value = inputValue;
-                                break;
-                            }
-                        }
-                    }
-                }
-                payload.inputs[bind_to] = inputValue; // 记录注入的参数，用于调试或验证
-            }
-        }
-
-        // 最终返回的 payload 应该是一个符合 ComfyUI API 要求的完整工作流对象
-        // 这里的实现是直接修改了原始工作流 JSON 的副本，并添加了一个inputs字段用于记录
-        // 实际调用 ComfyUI API 时，可能需要将这个修改后的 payload 发送过去
-        return payload;
+    if (uiInputs && typeof uiInputs === 'object') {
+      Object.entries(uiInputs).forEach(([key, value]) => {
+        valuesByPath[key] = value;
+      });
     }
+
+    bindings.forEach(({ componentId, bindTo }) => {
+      if (!bindTo) return;
+      if (Object.prototype.hasOwnProperty.call(uiInputs || {}, componentId)) {
+        valuesByPath[bindTo] = uiInputs[componentId];
+      }
+    });
+
+    const inputsPayload = {};
+
+    Object.entries(valuesByPath).forEach(([path, value]) => {
+      const metadata = parameters[path];
+      if (!metadata) {
+        return;
+      }
+
+      inputsPayload[path] = value;
+      const targetNode = metadata.nodeId != null
+        ? findNodeById(rawWorkflow, metadata.nodeId)
+        : null;
+
+      if (!targetNode) {
+        return;
+      }
+
+      if (metadata.source === 'widget' && Number.isInteger(metadata.widgetIndex)) {
+        if (!Array.isArray(targetNode.widgets_values)) {
+          targetNode.widgets_values = [];
+        }
+        targetNode.widgets_values[metadata.widgetIndex] = value;
+      } else if (metadata.source === 'input' && Number.isInteger(metadata.inputIndex)) {
+        if (Array.isArray(targetNode.inputs)) {
+          const targetInput = targetNode.inputs[metadata.inputIndex];
+          if (targetInput) {
+            delete targetInput.link;
+            targetInput.value = value;
+          }
+        }
+      } else if (metadata.source === 'input-object' && metadata.originalName) {
+        if (!targetNode.inputs || Array.isArray(targetNode.inputs)) {
+          targetNode.inputs = targetNode.inputs && !Array.isArray(targetNode.inputs)
+            ? targetNode.inputs
+            : {};
+        }
+        targetNode.inputs[metadata.originalName] = value;
+      }
+    });
+
+    return {
+      workflow_id: workflowId,
+      inputs: inputsPayload,
+      workflow: rawWorkflow,
+    };
+  }
 }
 
 module.exports = WorkflowService;
