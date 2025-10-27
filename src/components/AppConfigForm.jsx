@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import axios from 'axios';
+import api from '@/api/index.js';
 import useWorkflowStore from '@/store/useWorkflowStore';
 import useAppBuilderStore from '@/store/useAppBuilderStore';
 import ParameterCascader from '@/components/ParameterCascader';
@@ -187,10 +187,10 @@ const AppConfigForm = ({ onNext, onBack }) => {
       let response;
       if (appId) {
         // Update existing app
-        response = await axios.patch(`/api/apps/${appId}`, appConfig);
+        response = await api.patch(`/apps/${appId}`, appConfig);
       } else {
         // Create new app
-        response = await axios.post('/api/apps', appConfig);
+        response = await api.post('/apps', appConfig);
       }
       const savedApp = response.data.data;
       initApp(savedApp); // Update the store with the saved app data
