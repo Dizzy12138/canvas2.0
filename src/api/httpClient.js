@@ -6,26 +6,49 @@ const TOKEN_STORAGE_KEYS = [
   'token',
   'authToken',
   'auth_token',
+  'auth-token',
   'jwt',
   'jwtToken',
+  'jwt_token',
+  'jwt-token',
   'accessToken',
   'access_token',
+  'access-token',
   'canvas_token',
   'canvasToken',
+  'canvas-user',
+  'canvas_user',
   'canvasUser',
+  'Authorization',
+  'authorization',
   'user',
   'userInfo',
+  'user_info',
+  'userData',
+  'user_data',
+  'currentUser',
+  'profile',
+  'session',
+  'persist:auth',
+  'persist:user',
 ];
 
 const TOKEN_VALUE_KEYS = [
   'token',
   'accessToken',
   'access_token',
+  'access-token',
   'authToken',
   'auth_token',
+  'auth-token',
+  'authorization',
+  'Authorization',
   'jwt',
   'jwtToken',
+  'jwt_token',
   'value',
+  'bearerToken',
+  'idToken',
 ];
 
 const WINDOW_TOKEN_KEYS = [
@@ -34,24 +57,55 @@ const WINDOW_TOKEN_KEYS = [
   '__JWT_TOKEN__',
   '__AUTH_TOKEN__',
   '__CANVAS_AUTH__',
+  'Authorization',
+  'authorization',
 ];
 
 const COOKIE_TOKEN_KEYS = [
   'token',
   'authToken',
   'auth_token',
+  'auth-token',
   'accessToken',
   'access_token',
+  'access-token',
   'jwt',
   'jwtToken',
+  'jwt_token',
+  'jwt-token',
   'canvas_token',
   'canvasToken',
+  'canvas_user',
+  'canvas-user',
+  'Authorization',
+  'authorization',
 ];
 
-const isLikelyJwt = (value) => {
+const looksLikeToken = (value) => {
   if (typeof value !== 'string') return false;
   const token = value.trim().replace(/^Bearer\s+/i, '');
-  return token.split('.').length === 3;
+  if (!token) {
+    return false;
+  }
+
+  const parts = token.split('.');
+  if (parts.length === 3 && parts.every((part) => part.length > 0)) {
+    return true;
+  }
+
+  return /^[A-Za-z0-9-_]{32,}$/.test(token.replace(/=+$/, ''));
+};
+
+const safeDecodeURIComponent = (value) => {
+  if (typeof value !== 'string' || !value.includes('%')) {
+    return value;
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch (_) {
+    return value;
+  }
 };
 
 const tryParseJson = (value) => {
@@ -76,8 +130,11 @@ const findTokenInObject = (obj, depth = 0) => {
   }
 
   for (const value of Object.values(obj)) {
-    if (typeof value === 'string' && isLikelyJwt(value)) {
-      return value;
+    if (typeof value === 'string') {
+      const decoded = safeDecodeURIComponent(value);
+      if (looksLikeToken(decoded)) {
+        return decoded;
+      }
     }
     if (typeof value === 'object') {
       const nested = findTokenInObject(value, depth + 1);
@@ -94,8 +151,10 @@ const extractToken = (raw) => {
   if (!raw) return null;
 
   if (typeof raw === 'string') {
-    const trimmed = raw.trim();
+    let trimmed = raw.trim();
     if (!trimmed) return null;
+
+    trimmed = safeDecodeURIComponent(trimmed).trim();
 
     if (trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('"')) {
       const parsed = tryParseJson(trimmed);
@@ -108,15 +167,30 @@ const extractToken = (raw) => {
       return trimmed;
     }
 
-    if (isLikelyJwt(trimmed)) {
+    if (looksLikeToken(trimmed)) {
       return trimmed;
     }
 
     if (/token=/i.test(trimmed)) {
       const match = trimmed.match(/token=([^&;]+)/i);
       if (match?.[1]) {
-        return match[1];
+        return safeDecodeURIComponent(match[1]);
       }
+    }
+
+    const normalized = trimmed.replace(/^Bearer\s+/i, '');
+    if (looksLikeToken(normalized)) {
+      return normalized;
+    }
+
+    const sanitized = normalized.replace(/=+$/, '');
+    if (sanitized.length >= 24 && /^[A-Za-z0-9-_\.]+$/.test(sanitized)) {
+      return trimmed.startsWith('Bearer ') ? trimmed : normalized;
+    }
+
+    const lower = trimmed.toLowerCase();
+    if (!['null', 'undefined', '{}', '[]', '[object object]', '""', "''"].includes(lower)) {
+      return trimmed;
     }
 
     return null;
@@ -190,15 +264,17 @@ const readFromCookies = () => {
     const value = rest.join('=').trim();
     if (!value) continue;
 
+    const decodedValue = safeDecodeURIComponent(value);
+
     if (COOKIE_TOKEN_KEYS.includes(trimmedName)) {
-      const candidate = extractToken(value);
+      const candidate = extractToken(decodedValue);
       if (candidate) {
         return candidate;
       }
     }
 
-    if (isLikelyJwt(value)) {
-      return value;
+    if (looksLikeToken(decodedValue)) {
+      return decodedValue;
     }
   }
 
