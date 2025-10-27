@@ -6,7 +6,7 @@ import useTranslation from "@/hooks/useTranslation";
 import useAppBuilderStore from "@/store/useAppBuilderStore";
 import useWorkflowStore from "@/store/useWorkflowStore";
 import ParameterCascader from '@/components/ParameterCascader';
-import axios from 'axios';
+import api from '@/api/index.js';
 
 // 可视化组件渲染器
 const ComponentRenderer = ({
@@ -634,7 +634,7 @@ const PageBuilder = ({ onNext, onBack }) => {
       return;
     }
     try {
-      const response = await axios.patch(`/api/apps/${appId}`, {
+      const response = await api.patch(`/apps/${appId}`, {
         components: components,
         uiBindings: uiBindings,
       });

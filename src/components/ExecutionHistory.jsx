@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '@/api/index.js';
 
 const ExecutionHistory = ({ appId }) => {
   const [history, setHistory] = useState([]);
@@ -15,7 +15,7 @@ const ExecutionHistory = ({ appId }) => {
   const loadHistory = async () => {
     setLoading(true);
     try {
-      const response = await axios.get(`/api/apps/${appId}/history`);
+      const response = await api.get(`/apps/${appId}/history`);
       setHistory(response.data);
     } catch (error) {
       console.error('加载执行历史失败', error);
