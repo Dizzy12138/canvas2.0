@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import axios from 'axios';
+import api from '@/api/index.js';
 import { useParams } from 'react-router-dom';
 import useAppBuilderStore from '../store/useAppBuilderStore';
 import useWorkflowStore from '../store/useWorkflowStore';
@@ -38,7 +38,7 @@ const AppRunner = () => {
       setLoading(true);
       setError(null);
       try {
-        const response = await axios.get(`/api/apps/${resolvedAppId}`);
+        const response = await api.get(`/apps/${resolvedAppId}`);
         const appData = response.data?.data;
         if (appData) {
           initApp(appData);
@@ -108,7 +108,7 @@ const AppRunner = () => {
           }
         });
 
-      const response = await axios.post(`/api/comfy/apps/${resolvedAppId}/run`, {
+      const response = await api.post(`/comfy/apps/${resolvedAppId}/run`, {
         uiInputs: payloadInputs,
       });
 

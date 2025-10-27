@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '@/api/index.js';
 import { useNavigate } from 'react-router-dom'; // 添加useNavigate导入
 
 const ServiceManager = () => {
@@ -26,7 +26,7 @@ const ServiceManager = () => {
   const fetchServices = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/api/services');
+      const response = await api.get('/services');
       setServices(response.data.data || []);
     } catch (error) {
       console.error('获取服务列表失败:', error);
@@ -71,10 +71,10 @@ const ServiceManager = () => {
       setLoading(true);
       if (editingService) {
         // 更新服务
-        await axios.put(`/api/services/${editingService.id}`, formData);
+        await api.put(`/services/${editingService.id}`, formData);
       } else {
         // 创建服务
-        await axios.post('/api/services', formData);
+        await api.post('/services', formData);
       }
       setShowForm(false);
       setEditingService(null);
@@ -131,7 +131,7 @@ const ServiceManager = () => {
       
       if (window.confirm('确定要删除这个服务吗？')) {
         try {
-          await axios.delete(`/api/services/${serviceId}`);
+          await api.delete(`/services/${serviceId}`);
           fetchServices();
         } catch (error) {
           console.error('删除服务失败:', error);
@@ -142,7 +142,7 @@ const ServiceManager = () => {
       // 即使检测失败，也允许用户确认是否删除
       if (window.confirm('确定要删除这个服务吗？')) {
         try {
-          await axios.delete(`/api/services/${serviceId}`);
+          await api.delete(`/services/${serviceId}`);
           fetchServices();
         } catch (error) {
           console.error('删除服务失败:', error);
@@ -154,7 +154,7 @@ const ServiceManager = () => {
   // 设置默认服务
   const handleSetDefault = async (serviceId) => {
     try {
-      await axios.post(`/api/services/${serviceId}/set-default`);
+      await api.post(`/services/${serviceId}/set-default`);
       fetchServices();
     } catch (error) {
       console.error('设置默认服务失败:', error);
@@ -165,7 +165,7 @@ const ServiceManager = () => {
   // 健康检查
   const handleHealthCheck = async (serviceId) => {
     try {
-      await axios.post(`/api/services/${serviceId}/health-check`);
+      await api.post(`/services/${serviceId}/health-check`);
       fetchServices();
     } catch (error) {
       console.error('健康检查失败:', error);
