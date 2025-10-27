@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '@/api/index.js';
 import WorkflowUploader from './WorkflowUploader';
 import AppConfigForm from './AppConfigForm';
 import PageBuilder from './PageBuilder';
@@ -46,7 +46,7 @@ const AppBuilder = () => {
       // 假设有一个 API 来获取应用详情
       const fetchAppDetails = async () => {
         try {
-          const response = await axios.get(`/api/apps/${currentAppId}`);
+          const response = await api.get(`/apps/${currentAppId}`);
           initApp(response.data.data); // 初始化 AppBuilderStore
           fetchWorkflow(response.data.data.workflowId); // 加载关联的工作流
         } catch (error) {

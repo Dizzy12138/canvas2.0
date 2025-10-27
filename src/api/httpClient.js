@@ -6,11 +6,49 @@ const TOKEN_STORAGE_KEYS = [
   'token',
   'authToken',
   'auth_token',
+  'auth-token',
   'jwt',
   'jwtToken',
+  'jwt_token',
+  'jwt-token',
   'accessToken',
+  'access_token',
+  'access-token',
   'canvas_token',
   'canvasToken',
+  'canvas-user',
+  'canvas_user',
+  'canvasUser',
+  'Authorization',
+  'authorization',
+  'user',
+  'userInfo',
+  'user_info',
+  'userData',
+  'user_data',
+  'currentUser',
+  'profile',
+  'session',
+  'persist:auth',
+  'persist:user',
+];
+
+const TOKEN_VALUE_KEYS = [
+  'token',
+  'accessToken',
+  'access_token',
+  'access-token',
+  'authToken',
+  'auth_token',
+  'auth-token',
+  'authorization',
+  'Authorization',
+  'jwt',
+  'jwtToken',
+  'jwt_token',
+  'value',
+  'bearerToken',
+  'idToken',
 ];
 
 const WINDOW_TOKEN_KEYS = [
@@ -19,7 +57,159 @@ const WINDOW_TOKEN_KEYS = [
   '__JWT_TOKEN__',
   '__AUTH_TOKEN__',
   '__CANVAS_AUTH__',
+  'Authorization',
+  'authorization',
 ];
+
+const COOKIE_TOKEN_KEYS = [
+  'token',
+  'authToken',
+  'auth_token',
+  'auth-token',
+  'accessToken',
+  'access_token',
+  'access-token',
+  'jwt',
+  'jwtToken',
+  'jwt_token',
+  'jwt-token',
+  'canvas_token',
+  'canvasToken',
+  'canvas_user',
+  'canvas-user',
+  'Authorization',
+  'authorization',
+];
+
+const looksLikeToken = (value) => {
+  if (typeof value !== 'string') return false;
+  const token = value.trim().replace(/^Bearer\s+/i, '');
+  if (!token) {
+    return false;
+  }
+
+  const parts = token.split('.');
+  if (parts.length === 3 && parts.every((part) => part.length > 0)) {
+    return true;
+  }
+
+  return /^[A-Za-z0-9-_]{32,}$/.test(token.replace(/=+$/, ''));
+};
+
+const safeDecodeURIComponent = (value) => {
+  if (typeof value !== 'string' || !value.includes('%')) {
+    return value;
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch (_) {
+    return value;
+  }
+};
+
+const tryParseJson = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch (_) {
+    return null;
+  }
+};
+
+const findTokenInObject = (obj, depth = 0) => {
+  if (!obj || typeof obj !== 'object' || depth > 2) return null;
+
+  for (const key of TOKEN_VALUE_KEYS) {
+    const value = obj[key];
+    if (typeof value === 'string' && value) {
+      return value;
+    }
+  }
+
+  for (const value of Object.values(obj)) {
+    if (typeof value === 'string') {
+      const decoded = safeDecodeURIComponent(value);
+      if (looksLikeToken(decoded)) {
+        return decoded;
+      }
+    }
+    if (typeof value === 'object') {
+      const nested = findTokenInObject(value, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+
+  return null;
+};
+
+const extractToken = (raw) => {
+  if (!raw) return null;
+
+  if (typeof raw === 'string') {
+    let trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    trimmed = safeDecodeURIComponent(trimmed).trim();
+
+    if (trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('"')) {
+      const parsed = tryParseJson(trimmed);
+      if (parsed) {
+        return extractToken(parsed);
+      }
+    }
+
+    if (trimmed.startsWith('Bearer ')) {
+      return trimmed;
+    }
+
+    if (looksLikeToken(trimmed)) {
+      return trimmed;
+    }
+
+    if (/token=/i.test(trimmed)) {
+      const match = trimmed.match(/token=([^&;]+)/i);
+      if (match?.[1]) {
+        return safeDecodeURIComponent(match[1]);
+      }
+    }
+
+    const normalized = trimmed.replace(/^Bearer\s+/i, '');
+    if (looksLikeToken(normalized)) {
+      return normalized;
+    }
+
+    const sanitized = normalized.replace(/=+$/, '');
+    if (sanitized.length >= 24 && /^[A-Za-z0-9-_\.]+$/.test(sanitized)) {
+      return trimmed.startsWith('Bearer ') ? trimmed : normalized;
+    }
+
+    const lower = trimmed.toLowerCase();
+    if (!['null', 'undefined', '{}', '[]', '[object object]', '""', "''"].includes(lower)) {
+      return trimmed;
+    }
+
+    return null;
+  }
+
+  if (typeof raw === 'object') {
+    return findTokenInObject(raw);
+  }
+
+  return null;
+};
+
+const safeGetStorageItem = (storage, key) => {
+  try {
+    return storage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+};
 
 const ensureBearerPrefix = (token) => {
   if (!token) return token;
@@ -29,13 +219,21 @@ const ensureBearerPrefix = (token) => {
 const readFromStorage = (storage) => {
   if (!storage) return null;
   for (const key of TOKEN_STORAGE_KEYS) {
-    try {
-      const value = storage.getItem(key);
-      if (value) {
-        return value;
+    const candidate = extractToken(safeGetStorageItem(storage, key));
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  // Fallback: inspect all keys to support unknown storage names
+  if (typeof storage.length === 'number' && storage.length > 0) {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (!key) continue;
+      const candidate = extractToken(safeGetStorageItem(storage, key));
+      if (candidate) {
+        return candidate;
       }
-    } catch (_) {
-      // ignore storage access errors (e.g. security restrictions)
     }
   }
   return null;
@@ -45,13 +243,41 @@ const readFromWindow = () => {
   if (typeof window === 'undefined') return null;
   for (const key of WINDOW_TOKEN_KEYS) {
     const value = window[key];
-    if (typeof value === 'string' && value) {
-      return value;
-    }
-    if (value && typeof value === 'object' && typeof value.token === 'string') {
-      return value.token;
+    const candidate = extractToken(value);
+    if (candidate) {
+      return candidate;
     }
   }
+  return null;
+};
+
+const readFromCookies = () => {
+  if (typeof document === 'undefined' || typeof document.cookie !== 'string') {
+    return null;
+  }
+
+  const cookies = document.cookie.split(';');
+  for (const rawCookie of cookies) {
+    const [name, ...rest] = rawCookie.split('=');
+    if (!name) continue;
+    const trimmedName = name.trim();
+    const value = rest.join('=').trim();
+    if (!value) continue;
+
+    const decodedValue = safeDecodeURIComponent(value);
+
+    if (COOKIE_TOKEN_KEYS.includes(trimmedName)) {
+      const candidate = extractToken(decodedValue);
+      if (candidate) {
+        return candidate;
+      }
+    }
+
+    if (looksLikeToken(decodedValue)) {
+      return decodedValue;
+    }
+  }
+
   return null;
 };
 
@@ -73,7 +299,12 @@ export const resolveAuthToken = () => {
     }
   }
 
-  return readFromWindow();
+  const windowToken = readFromWindow();
+  if (windowToken) {
+    return windowToken;
+  }
+
+  return readFromCookies();
 };
 
 const attachAuthHeader = (config) => {

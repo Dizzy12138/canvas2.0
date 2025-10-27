@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
 
 const WorkflowParameterManager = ({ workflowData, onParametersChange }) => {
   const [parameters, setParameters] = useState({});
