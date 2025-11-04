@@ -9,6 +9,9 @@ const defaultState = {
   appId: null,
   appName: '',
   workflowId: null,
+  outputNodes: [],
+  timeout: 300,
+  appData: null, // 完整的应用数据
 };
 
 const normaliseBindings = (bindings = []) => {
@@ -41,12 +44,17 @@ const useAppBuilderStore = create(
           uiBindings: normaliseBindings(appData.uiBindings),
           paramsSchema: appData.paramsSchema || [],
           workflowId: appData.workflowId || null,
+          outputNodes: appData.outputNodes || [],
+          timeout: appData.timeout || 300,
+          appData: appData, // 保存完整的应用数据
         });
       },
 
       setAppId: (appId) => set({ appId }),
       setAppName: (name) => set({ appName: name }),
       setWorkflowId: (workflowId) => set({ workflowId }),
+      setOutputNodes: (outputNodes) => set({ outputNodes }),
+      setTimeout: (timeout) => set({ timeout }),
 
       addComponent: (component) =>
         set((state) => ({
@@ -61,6 +69,17 @@ const useAppBuilderStore = create(
               defaultProps: component.defaultProps || {},
               type: component.type,
               name: component.name,
+              label: component.label,
+              properties: component.properties || {},
+              order: component.order !== undefined ? component.order : state.components.length,
+              boundNodeId: component.boundNodeId,
+              boundNodeName: component.boundNodeName,
+              boundNodeType: component.boundNodeType,
+              boundParamPath: component.boundParamPath,
+              boundParamType: component.boundParamType,
+              boundParamLabel: component.boundParamLabel,
+              paramName: component.paramName,
+              defaultValue: component.defaultValue,
             },
           ],
         })),
@@ -141,6 +160,9 @@ const useAppBuilderStore = create(
         appId: state.appId,
         appName: state.appName,
         workflowId: state.workflowId,
+        outputNodes: state.outputNodes,
+        timeout: state.timeout,
+        appData: state.appData,
       }),
     },
   ),

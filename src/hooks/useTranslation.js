@@ -4,6 +4,8 @@ const translations = {
   zh: {
     'appBuilder.title': '应用构建器',
     'appBuilder.serviceManagement': '服务管理',
+    'appBuilder.workflowManagement': '工作流管理',
+    'appBuilder.appManagement': '应用管理',
     'appBuilder.uploadWorkflow': '上传工作流',
     'appBuilder.appConfig': '应用配置',
     'appBuilder.pageBuilder': '页面构建器',
@@ -35,6 +37,8 @@ const translations = {
   en: {
     'appBuilder.title': 'App Builder',
     'appBuilder.serviceManagement': 'Service Management',
+    'appBuilder.workflowManagement': 'Workflow Management',
+    'appBuilder.appManagement': 'App Management',
     'appBuilder.uploadWorkflow': 'Upload Workflow',
     'appBuilder.appConfig': 'App Configuration',
     'appBuilder.pageBuilder': 'Page Builder',

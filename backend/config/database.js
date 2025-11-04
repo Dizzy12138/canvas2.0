@@ -1,186 +1,343 @@
 const mongoose = require('mongoose');
 
-// 内存中的服务数据存储（用于开发模式下MongoDB不可用时）
-let inMemoryServices = [];
-let nextId = 1;
-let inMemoryApps = []; // 添加应用数据的内存存储
-
-// 模拟MongoDB服务模型的方法
-const mockServiceModel = {
-  find: async (cond) => {
-    console.log('使用内存数据库查找服务:', cond);
-    let result = inMemoryServices;
-    
-    if (cond.name) {
-      const regex = cond.name.$regex || cond.name;
-      const options = cond.name.$options || '';
-      const flags = options.includes('i') ? 'i' : '';
-      const re = new RegExp(regex, flags);
-      result = result.filter(s => re.test(s.name));
-    }
-    
-    if (cond.enabled !== undefined) {
-      result = result.filter(s => s.enabled === cond.enabled);
-    }
-    
-    if (cond.healthStatus !== undefined) {
-      if (cond.healthStatus === 'healthy') {
-        result = result.filter(s => s.healthStatus === 'healthy');
-      } else {
-        result = result.filter(s => s.healthStatus !== 'healthy');
-      }
-    }
-    
-    return result.sort((a, b) => {
-      if (b.isDefault !== a.isDefault) return b.isDefault - a.isDefault;
-      return a.name.localeCompare(b.name);
-    });
-  },
-  
-  findOne: async (cond) => {
-    console.log('使用内存数据库查找单个服务:', cond);
-    return inMemoryServices.find(s => {
-      return Object.keys(cond).every(key => s[key] === cond[key]);
-    });
-  },
-  
-  findById: async (id) => {
-    console.log('使用内存数据库通过ID查找服务:', id);
-    return inMemoryServices.find(s => s.id == id);
-  },
-  
-  create: async (data) => {
-    console.log('使用内存数据库创建服务:', data);
-    const newService = {
-      id: nextId++,
-      ...data,
-      healthStatus: 'unknown',
-      lastHealthCheckAt: null,
-      lastHealthError: '',
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-    inMemoryServices.push(newService);
-    return newService;
-  },
-  
-  updateMany: async (cond, update) => {
-    console.log('使用内存数据库批量更新服务:', cond, update);
-    inMemoryServices = inMemoryServices.map(s => {
-      if (Object.keys(cond).every(key => s[key] === cond[key])) {
-        return { ...s, ...update.$set, updatedAt: new Date() };
-      }
-      return s;
-    });
-  },
-  
-  deleteOne: async (cond) => {
-    console.log('使用内存数据库删除服务:', cond);
-    inMemoryServices = inMemoryServices.filter(s => {
-      return !Object.keys(cond).every(key => s[key] == cond[key]);
-    });
+// 数据库抽象层 - 统一管理数据库连接和模型
+class DatabaseManager {
+  constructor() {
+    this.isConnected = false;
+    this.useMemoryDB = false;
+    this.models = {};
   }
-};
 
-// 模拟MongoDB应用模型的方法
-const mockAppModel = {
-  find: async (cond) => {
-    console.log('使用内存数据库查找应用:', cond);
-    let result = inMemoryApps;
-    
-    if (cond.name) {
-      result = result.filter(app => app.name === cond.name);
-    }
-    
-    return result;
-  },
-  
-  findOne: async (cond) => {
-    console.log('使用内存数据库查找单个应用:', cond);
-    return inMemoryApps.find(app => {
-      return Object.keys(cond).every(key => {
-        if (key === '_id' && cond[key].$ne) {
-          return app._id != cond[key].$ne;
-        }
-        return app[key] === cond[key];
+  // 初始化数据库连接
+  async connect() {
+    try {
+      // 尝试连接MongoDB
+      const conn = await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/ai_canvas', {
+        useNewUrlParser: true,
+        useUnifiedTopology: true
       });
-    });
-  },
-  
-  findById: async (id) => {
-    console.log('使用内存数据库通过ID查找应用:', id);
-    return inMemoryApps.find(app => app._id == id);
-  },
-  
-  create: async (data) => {
-    console.log('使用内存数据库创建应用:', data);
-    const newApp = {
-      _id: nextId++,
-      ...data,
-      createdAt: new Date(),
-      updatedAt: new Date()
+
+      console.log(`MongoDB连接成功: ${conn.connection.host}`);
+      this.isConnected = true;
+      this.useMemoryDB = false;
+      
+      // 监听连接事件
+      mongoose.connection.on('error', (err) => {
+        console.error('MongoDB连接错误:', err);
+        this.isConnected = false;
+      });
+
+      mongoose.connection.on('disconnected', () => {
+        console.log('MongoDB连接断开');
+        this.isConnected = false;
+      });
+
+      return true;
+    } catch (error) {
+      console.error('MongoDB连接失败:', error.message);
+      console.log('切换到内存数据库模式');
+      this.isConnected = false;
+      this.useMemoryDB = true;
+      
+      // 初始化内存数据库
+      this.initializeMemoryDB();
+      
+      // 开发模式下不退出进程
+      if (process.env.NODE_ENV === 'production') {
+        process.exit(1);
+      }
+      
+      return false;
+    }
+  }
+
+  // 初始化内存数据库
+  initializeMemoryDB() {
+    console.log('初始化内存数据库...');
+    
+    // 初始化AIService内存数据库
+    if (!global.AIService) {
+      global.AIService = [];
+      this.setupAIServiceMethods();
+    }
+    
+    // 初始化App内存数据库
+    if (!global.App) {
+    global.App = [];
+    // 为App数组添加findIndex方法
+    global.App.findIndex = function(predicate) {
+      for (let i = 0; i < this.length; i++) {
+        if (predicate(this[i])) {
+          return i;
+        }
+      }
+      return -1;
     };
-    inMemoryApps.push(newApp);
-    return newApp;
-  },
-  
-  findByIdAndUpdate: async (id, updates, options) => {
-    console.log('使用内存数据库更新应用:', id, updates);
-    const index = inMemoryApps.findIndex(app => app._id == id);
-    if (index !== -1) {
-      inMemoryApps[index] = { ...inMemoryApps[index], ...updates, updatedAt: new Date() };
-      return inMemoryApps[index];
+    this.setupAppMethods();
     }
-    return null;
+    
+    console.log('内存数据库初始化完成');
   }
-};
 
+  // 设置AIService内存数据库方法
+  setupAIServiceMethods() {
+    // 生成ObjectId格式的ID
+    const generateObjectId = () => {
+      const timestamp = Math.floor(Date.now() / 1000).toString(16);
+      const random = Math.random().toString(16).substring(2, 8);
+      const counter = Math.floor(Math.random() * 16777216).toString(16).padStart(6, '0');
+      return timestamp + random + counter;
+    };
+
+    global.AIService.find = function(condition = {}) {
+      return Promise.resolve(
+        this.filter(item => {
+          if (condition.name && condition.name.$regex) {
+            const regex = new RegExp(condition.name.$regex, condition.name.$options || 'i');
+            return regex.test(item.name);
+          }
+          if (condition.enabled !== undefined) {
+            return item.enabled === condition.enabled;
+          }
+          if (condition.healthStatus) {
+            if (typeof condition.healthStatus === 'object' && condition.healthStatus.$ne) {
+              return item.healthStatus !== condition.healthStatus.$ne;
+            }
+            return item.healthStatus === condition.healthStatus;
+          }
+          return true;
+        })
+      );
+    };
+
+    global.AIService.findOne = function(condition) {
+      const result = this.filter(item => {
+        for (const [key, value] of Object.entries(condition)) {
+          if (item[key] !== value) return false;
+        }
+        return true;
+      });
+      return Promise.resolve(result[0] || null);
+    };
+
+    global.AIService.findById = function(id) {
+      const result = this.filter(item => item.id === id || item._id === id);
+      return Promise.resolve(result[0] || null);
+    };
+
+    global.AIService.create = function(data) {
+      const newItem = {
+        id: generateObjectId(),
+        _id: generateObjectId(),
+        ...data,
+        healthStatus: 'unknown',
+        lastHealthCheckAt: null,
+        lastHealthError: '',
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      this.push(newItem);
+      return Promise.resolve(newItem);
+    };
+
+    global.AIService.updateMany = function(condition, update) {
+      return Promise.resolve(
+        this.forEach(item => {
+          let shouldUpdate = true;
+          for (const [key, value] of Object.entries(condition)) {
+            if (item[key] !== value) {
+              shouldUpdate = false;
+              break;
+            }
+          }
+          if (shouldUpdate) {
+            if (update.$set) {
+              Object.assign(item, update.$set);
+            } else {
+              Object.assign(item, update);
+            }
+            item.updatedAt = new Date();
+          }
+        })
+      );
+    };
+
+    global.AIService.deleteOne = function(condition) {
+      const index = this.findIndex(item => {
+        for (const [key, value] of Object.entries(condition)) {
+          if (item[key] !== value) return false;
+        }
+        return true;
+      });
+      if (index !== -1) {
+        this.splice(index, 1);
+      }
+      return Promise.resolve();
+    };
+  }
+
+  // 设置App内存数据库方法
+  setupAppMethods() {
+    // 生成ObjectId格式的ID
+    const generateObjectId = () => {
+      const timestamp = Math.floor(Date.now() / 1000).toString(16);
+      const random = Math.random().toString(16).substring(2, 8);
+      const counter = Math.floor(Math.random() * 16777216).toString(16).padStart(6, '0');
+      return timestamp + random + counter;
+    };
+
+    global.App.find = function(condition = {}) {
+      const result = this.filter(item => {
+        if (condition.createdBy) {
+          return item.createdBy === condition.createdBy;
+        }
+        if (condition._id) {
+          return item._id === condition._id;
+        }
+        if (condition.name) {
+          return item.name === condition.name;
+        }
+        return true;
+      });
+      
+      // 返回一个带有 sort 方法的对象
+      const queryResult = {
+        data: result,
+        sort: function(sortObj) {
+          const sorted = [...this.data];
+          
+          // 如果只有一个排序字段，直接排序
+          const sortFields = Object.entries(sortObj);
+          if (sortFields.length === 1) {
+            const [field, direction] = sortFields[0];
+            sorted.sort((a, b) => {
+              const aVal = a[field];
+              const bVal = b[field];
+              if (aVal < bVal) return direction === -1 ? -1 : 1;
+              if (aVal > bVal) return direction === -1 ? 1 : -1;
+              return 0;
+            });
+          } else {
+            // 多个排序字段，按优先级排序
+            sorted.sort((a, b) => {
+              for (const [field, direction] of sortFields) {
+                const aVal = a[field];
+                const bVal = b[field];
+                if (aVal < bVal) return direction === -1 ? -1 : 1;
+                if (aVal > bVal) return direction === -1 ? 1 : -1;
+              }
+              return 0;
+            });
+          }
+          
+          return Promise.resolve(sorted);
+        }
+      };
+      
+      return Promise.resolve(queryResult);
+    };
+
+    global.App.findOne = function(condition) {
+      const result = this.filter(item => {
+        for (const [key, value] of Object.entries(condition)) {
+          if (key === '_id') {
+            if (item._id !== value) return false;
+          } else if (key === 'createdBy') {
+            if (item.createdBy !== value) return false;
+          } else if (item[key] !== value) return false;
+        }
+        return true;
+      });
+      return Promise.resolve(result[0] || null);
+    };
+
+    global.App.findById = function(id) {
+      const result = this.filter(item => item._id === id);
+      return Promise.resolve(result[0] || null);
+    };
+
+    global.App.create = function(data) {
+      const newItem = {
+        _id: generateObjectId(),
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.push(newItem);
+      return Promise.resolve(newItem);
+    };
+
+    global.App.findOneAndUpdate = function(condition, update, options = {}) {
+      const result = this.filter(item => {
+        for (const [key, value] of Object.entries(condition)) {
+          if (key === '_id') {
+            if (item._id !== value) return false;
+          } else if (key === 'createdBy') {
+            if (item.createdBy !== value) return false;
+          } else if (item[key] !== value) return false;
+        }
+        return true;
+      });
+      
+      if (result.length > 0) {
+        const item = result[0];
+        Object.assign(item, update);
+        item.updatedAt = new Date();
+        return Promise.resolve(item);
+      }
+      return Promise.resolve(null);
+    };
+
+    global.App.findOneAndDelete = function(condition) {
+      const result = this.filter(item => {
+        for (const [key, value] of Object.entries(condition)) {
+          if (key === '_id') {
+            if (item._id !== value) return false;
+          } else if (key === 'createdBy') {
+            if (item.createdBy !== value) return false;
+          } else if (item[key] !== value) return false;
+        }
+        return true;
+      });
+      
+      if (result.length > 0) {
+        const item = result[0];
+        const index = this.indexOf(item);
+        this.splice(index, 1);
+        return Promise.resolve(item);
+      }
+      return Promise.resolve(null);
+    };
+  }
+
+  // 获取模型 - 统一接口
+  getModel(modelName) {
+    if (this.useMemoryDB) {
+      return global[modelName];
+    } else {
+      return require(`../models/${modelName}`);
+    }
+  }
+
+  // 检查是否使用内存数据库
+  isUsingMemoryDB() {
+    return this.useMemoryDB;
+  }
+
+  // 检查数据库连接状态
+  isDatabaseConnected() {
+    return this.isConnected;
+  }
+}
+
+// 创建单例实例
+const dbManager = new DatabaseManager();
+
+// 导出连接函数
 const connectDB = async () => {
-  try {
-    const conn = await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/ai_canvas', {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
-
-    console.log(`MongoDB连接成功: ${conn.connection.host}`);
-    
-    // 监听连接事件
-    mongoose.connection.on('error', (err) => {
-      console.error('MongoDB连接错误:', err);
-    });
-
-    mongoose.connection.on('disconnected', () => {
-      console.log('MongoDB连接断开');
-    });
-
-    // 优雅关闭
-    process.on('SIGINT', async () => {
-      await mongoose.connection.close();
-      console.log('MongoDB连接已关闭');
-      process.exit(0);
-    });
-
-  } catch (error) {
-    console.error('MongoDB连接失败:', error);
-    console.log('在开发模式下使用内存数据库');
-    
-    // 替换AIService模型为内存模拟
-    const AIService = require('../models/AIService');
-    Object.assign(AIService, mockServiceModel);
-    
-    // 替换App模型为内存模拟
-    const App = require('../models/App');
-    Object.assign(App, mockAppModel);
-    
-    // 挂载到全局对象，供路由使用
-    global.AIService = mockServiceModel;
-    global.App = mockAppModel;
-    
-    // 开发模式下不退出进程
-    if (process.env.NODE_ENV === 'production') {
-      process.exit(1);
-    }
-  }
+  return await dbManager.connect();
 };
 
-module.exports = connectDB;
+// 导出数据库管理器
+module.exports = { connectDB, dbManager };
+module.exports = { connectDB, dbManager };

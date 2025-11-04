@@ -1,0 +1,49 @@
+{
+  "1": {
+    "inputs": {
+      "image": "LTS613WE01-Swatch.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "3": {
+    "inputs": {
+      "filename_prefix": "80",
+      "output_path": "D:\\ComfyUI_windows_portable\\ComfyUI\\output\\final_compressed",
+      "max_size_kb": 1024,
+      "min_size_kb": 512,
+      "start_quality": 100,
+      "images": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "SaveImageWithTargetSize",
+    "_meta": {
+      "title": "Save Image With Compression"
+    }
+  },
+  "4": {
+    "inputs": {
+      "aspect_ratio": "original",
+      "proportional_width": 1,
+      "proportional_height": 1,
+      "fit": "letterbox",
+      "method": "lanczos",
+      "round_to_multiple": "8",
+      "scale_to_side": "longest",
+      "scale_to_length": 80,
+      "background_color": "#000000",
+      "image": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "LayerUtility: ImageScaleByAspectRatio V2",
+    "_meta": {
+      "title": "LayerUtility: ImageScaleByAspectRatio V2"
+    }
+  }
+}

@@ -5,7 +5,7 @@ import Toolbar from './Toolbar';
 import EnhancedLayerPanel from './EnhancedLayerPanel';
 import PropertyPanel from './PropertyPanel';
 import AIPanel from './AIPanel';
-import ServiceManager from './settings/ServiceManager';
+import ServiceManager from './ServiceManager';
 import VisualWorkflowEditor from './VisualWorkflowEditor';
 import MaskManager from './MaskManager';
 import AlignAssistSystem from './AlignAssistSystem';

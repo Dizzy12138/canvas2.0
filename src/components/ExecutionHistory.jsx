@@ -16,7 +16,7 @@ const ExecutionHistory = ({ appId }) => {
     setLoading(true);
     try {
       const response = await api.get(`/apps/${appId}/history`);
-      setHistory(response.data);
+      setHistory(response.data?.data || []);
     } catch (error) {
       console.error('加载执行历史失败', error);
     } finally {

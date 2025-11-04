@@ -30,6 +30,8 @@ const WorkflowEditorPage = () => {
   };
 
   const handleWorkflowSelect = async (workflowId) => {
+    if (!workflowId) return;
+    
     setLoading(true);
     try {
       const data = await getWorkflow(workflowId);
@@ -84,9 +86,9 @@ const WorkflowEditorPage = () => {
               disabled={loading}
             >
               <option value="">选择工作流</option>
-              {workflows.map((workflow) => (
-                <option key={workflow.id} value={workflow.id}>
-                  {workflow.name} ({workflow.type === 'builtin' ? '内置' : '自定义'})
+              {workflows.map((workflow, index) => (
+                <option key={workflow.id || workflow._id || index} value={workflow.id || workflow._id}>
+                  {workflow.name || workflow.filename} ({workflow.type === 'builtin' ? '内置' : '自定义'})
                 </option>
               ))}
             </select>

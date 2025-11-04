@@ -21,6 +21,9 @@ const WorkflowUploader = ({ onNext }) => {
         return;
       }
       
+      // 清空旧的工作流数据，准备重新上传解析
+      useWorkflowStore.getState().clearWorkflow();
+      
       setFile(selectedFile);
       useWorkflowStore.setState({ error: null });
     }
@@ -42,6 +45,9 @@ const WorkflowUploader = ({ onNext }) => {
         return;
       }
       
+      // 清空旧的工作流数据，准备重新上传解析
+      useWorkflowStore.getState().clearWorkflow();
+      
       setFile(droppedFile);
       useWorkflowStore.setState({ error: null });
     }
@@ -57,6 +63,17 @@ const WorkflowUploader = ({ onNext }) => {
       return;
     }
     try {
+      // 确保在上传前清空旧数据（双重保险）
+      useWorkflowStore.getState().clearWorkflow();
+      
+      // 清空 AppBuilderStore 中的工作流相关数据，但保留应用基本信息（如果有）
+      const appStore = useAppBuilderStore.getState();
+      appStore.setWorkflowId(null);
+      // 只清空工作流相关的组件和绑定，保留 appId 等基本信息
+      appStore.setComponents([]);
+      appStore.setUiBindings([]);
+      appStore.setParamsSchema([]);
+      
       const uploadedWorkflow = await uploadWorkflow(file);
       if (uploadedWorkflow) {
         const { setWorkflowId } = useAppBuilderStore.getState();
@@ -108,7 +125,7 @@ const WorkflowUploader = ({ onNext }) => {
                 <p className="text-lg font-medium text-green-700">{file?.name}</p>
                 <p className="text-sm text-green-600">文件上传成功</p>
                 <p className="text-sm text-blue-600 mt-2">
-                  检测到 {(nodesTree && nodesTree.length) || 0} 个节点
+                  检测到 {(nodesTree && Array.isArray(nodesTree) && nodesTree.length) || 0} 个节点
                 </p>
               </>
             ) : (

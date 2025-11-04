@@ -56,6 +56,7 @@ export function useEnhancedLayers(initialLayers = []) {
       orderIndex: layers.length,
       effects: layerData.effects || [],
       objects: layerData.objects || [],
+      shapeIds: layerData.shapeIds || [], // 存储关联的tldraw shape IDs
       thumbnail: layerData.thumbnail || null,
       parentId: layerData.parentId || null,
       createdAt: new Date(),

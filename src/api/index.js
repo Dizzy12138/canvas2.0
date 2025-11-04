@@ -59,6 +59,31 @@ export const getWorkflow = async (id) => {
   return data.data;
 };
 
+// Apps
+export const listApps = async () => {
+  const { data } = await api.get('/apps');
+  return data.data || [];
+};
+
+export const getApp = async (id) => {
+  const { data } = await api.get(`/apps/${id}`);
+  return data.data;
+};
+
+export const createApp = async (payload) => {
+  const { data } = await api.post('/apps', payload);
+  return data.data;
+};
+
+export const updateApp = async (id, payload) => {
+  const { data } = await api.put(`/apps/${id}`, payload);
+  return data.data;
+};
+
+export const deleteApp = async (id) => {
+  await api.delete(`/apps/${id}`);
+};
+
 // Resolve + Proxy
 export const resolveEndpoint = async (preferEndpointId) => {
   const params = preferEndpointId ? { preferEndpointId } : {};

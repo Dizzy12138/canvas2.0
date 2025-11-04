@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const ParameterCascader = ({ options, value, onChange, placeholder = '请选择参数', disabled = false }) => {
+const ParameterCascader = ({ 
+  options, 
+  value, 
+  onChange, 
+  placeholder = '请选择参数', 
+  disabled = false,
+  showDescription = true,
+  showType = true,
+  showRequired = true
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [selectedPath, setSelectedPath] = useState([]); // 存储当前选择的路径，例如 ['KSampler', 'cfg']
@@ -56,7 +65,7 @@ const ParameterCascader = ({ options, value, onChange, placeholder = '请选择�
     const filteredOptions = currentOptions.filter(matchesSearch);
 
     return (
-      <ul className="min-w-[150px] max-h-60 overflow-y-auto bg-white border-r border-gray-200 py-1 shadow-sm">
+      <ul className="min-w-[200px] max-h-60 overflow-y-auto bg-white border-r border-gray-200 py-1 shadow-sm">
         {filteredOptions.map((option) => (
           <li
             key={option.value}
@@ -64,10 +73,26 @@ const ParameterCascader = ({ options, value, onChange, placeholder = '请选择�
               ${selectedPath[level] === option.value ? 'bg-blue-100 text-blue-800' : ''}`}
             onClick={() => handleSelect(option, level)}
           >
-            {option.label}
-            {option.children && option.children.length > 0 && (
-              <span className="float-right">▶</span>
-            )}
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <div className="font-medium">{option.label}</div>
+                {level === 0 && option.nodeType && (
+                  <div className="text-xs text-gray-500 mt-1">{option.nodeType}</div>
+                )}
+                {level === 1 && showDescription && option.description && (
+                  <div className="text-xs text-gray-500 mt-1">{option.description}</div>
+                )}
+                {level === 1 && showType && option.type && (
+                  <div className="text-xs text-gray-400 mt-1">类型: {option.type}</div>
+                )}
+                {level === 1 && showRequired && option.isRequired && (
+                  <div className="text-xs text-red-500 mt-1">必需参数</div>
+                )}
+              </div>
+              {option.children && option.children.length > 0 && (
+                <span className="ml-2">▶</span>
+              )}
+            </div>
           </li>
         ))}
       </ul>

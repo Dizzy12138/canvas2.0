@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { submitPrompt, resolveEndpoint } from '../api/index.js';
-import ServiceManager from './settings/ServiceManager.jsx';
+import ServiceManager from './ServiceManager.jsx';
 import VisualWorkflowEditor from './VisualWorkflowEditor.jsx';
 // 导入新的组件和hooks
 import { useEnhancedLayers } from '../hooks/useEnhancedLayers';

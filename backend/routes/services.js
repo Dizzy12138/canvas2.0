@@ -1,14 +1,10 @@
 const express = require('express');
 const Joi = require('joi');
 const axios = require('axios');
-// 尝试引入AIService模型，如果MongoDB不可用则使用全局模拟
-let AIService;
-try {
-  AIService = require('../models/AIService');
-} catch (e) {
-  console.log('使用内存数据库模拟');
-  AIService = global.AIService;
-}
+const { dbManager } = require('../config/database');
+
+// 获取AIService模型
+const AIService = dbManager.getModel('AIService');
 
 const router = express.Router();
 
@@ -169,10 +165,28 @@ router.post('/:id/set-default', async (req, res, next) => {
   try {
     const s = await AIService.findById(req.params.id);
     if (!s) return res.status(404).json({ success: false, message: '服务不存在' });
+    
+    // 先将所有服务设为非默认
     await AIService.updateMany({ isDefault: true }, { $set: { isDefault: false } });
+    
+    // 设置当前服务为默认
     s.isDefault = true;
     s.updatedAt = new Date();
-    await s.save(); // 需要保存更改
+    
+    // 保存更改
+    if (typeof s.save === 'function') {
+      // MongoDB模型
+      await s.save();
+    } else {
+      // 内存数据库，直接更新
+      if (global.AIService) {
+        const index = global.AIService.findIndex(item => item.id === s.id);
+        if (index !== -1) {
+          global.AIService[index] = s;
+        }
+      }
+    }
+    
     res.json({ success: true, data: maskService(s) });
   } catch (err) { next(err); }
 });

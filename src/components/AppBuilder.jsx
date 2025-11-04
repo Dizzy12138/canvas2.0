@@ -4,7 +4,7 @@ import WorkflowUploader from './WorkflowUploader';
 import AppConfigForm from './AppConfigForm';
 import PageBuilder from './PageBuilder';
 import AppRunner from './AppRunner';
-import ServiceManager from './ServiceManager';
+import AppList from './AppList';
 import useTranslation from '../hooks/useTranslation';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import useWorkflowStore from '../store/useWorkflowStore';
@@ -16,16 +16,17 @@ const AppBuilder = () => {
   const location = useLocation();
   const { step } = useParams();
 
-  const { workflowId, fetchWorkflow } = useWorkflowStore();
-  const { appId, initApp } = useAppBuilderStore();
+  const { workflowId, fetchWorkflow, clearWorkflow } = useWorkflowStore();
+  const { appId, initApp, clearAppBuilder } = useAppBuilderStore();
 
   // 根据URL参数或默认值设置当前步骤
   const getCurrentStep = () => {
-    if (location.pathname.includes('/app-builder/1')) return 1;
-    if (location.pathname.includes('/app-builder/2')) return 2;
-    if (location.pathname.includes('/app-builder/3')) return 3;
-    if (location.pathname.includes('/app-builder/4')) return 4;
-    return 0; // 默认为服务管理步骤
+    if (location.pathname.includes('/app-builder/1')) return 1; // 应用管理
+    if (location.pathname.includes('/app-builder/2')) return 2; // 上传工作流
+    if (location.pathname.includes('/app-builder/3')) return 3; // 应用配置
+    if (location.pathname.includes('/app-builder/4')) return 4; // 页面构建器
+    if (location.pathname.includes('/app-builder/5')) return 5; // 运行应用
+    return 1; // 默认为应用管理步骤
   };
 
   const [currentStep, setCurrentStep] = useState(getCurrentStep());
@@ -38,29 +39,52 @@ const AppBuilder = () => {
     }
   }, [location.pathname]);
 
+  // 监听步骤变化，确保新增工作流时清空旧数据
+  useEffect(() => {
+    const queryParams = new URLSearchParams(location.search);
+    const currentAppId = queryParams.get('appId');
+    const currentStepNum = getCurrentStep();
+    
+    // 如果进入步骤1（应用管理），清空所有数据，准备新建流程
+    if (currentStepNum === 1) {
+      console.log('Entering app management, clearing all data');
+      clearAppBuilder();
+      clearWorkflow();
+    }
+    // 如果进入步骤2（上传工作流）且没有 appId，说明是新增流程，清空旧数据
+    else if (currentStepNum === 2 && !currentAppId) {
+      console.log('Clearing app builder store for new workflow');
+      clearAppBuilder();
+    }
+  }, [location.pathname, location.search, clearAppBuilder, clearWorkflow]);
+
   // 如果有 appId，尝试加载应用数据
   useEffect(() => {
     const queryParams = new URLSearchParams(location.search);
     const currentAppId = queryParams.get('appId');
-    if (currentAppId && !appId) {
+    if (currentAppId) {
       // 假设有一个 API 来获取应用详情
       const fetchAppDetails = async () => {
         try {
+          console.log('Fetching app details for:', currentAppId);
           const response = await api.get(`/apps/${currentAppId}`);
+          console.log('App data received:', response.data.data);
           initApp(response.data.data); // 初始化 AppBuilderStore
-          fetchWorkflow(response.data.data.workflowId); // 加载关联的工作流
+          if (response.data.data.workflowId) {
+            fetchWorkflow(response.data.data.workflowId); // 加载关联的工作流
+          }
         } catch (error) {
           console.error('Failed to fetch app details:', error);
         }
       };
-      // fetchAppDetails(); // 暂时注释，因为还没有 /api/apps/:appId 接口
+      fetchAppDetails(); // 启用应用数据加载
     }
-  }, [location.search, appId, initApp, fetchWorkflow]);
+  }, [location.search, initApp, fetchWorkflow]);
 
   const steps = [
     {
-      title: t('appBuilder.serviceManagement'),
-      content: <ServiceManager />,
+      title: t('appBuilder.appManagement'),
+      content: <AppList />,
     },
     {
       title: t('appBuilder.uploadWorkflow'),
@@ -68,8 +92,8 @@ const AppBuilder = () => {
         <WorkflowUploader 
           onNext={(workflowId) => {
             // workflowId 从 useWorkflowStore 中获取
-            setCurrentStep(2);
-            navigate(`/app-builder/2?workflowId=${workflowId}`); // 导航到下一步
+            setCurrentStep(3);
+            navigate(`/app-builder/3?workflowId=${workflowId}`); // 导航到应用配置
           }} 
         />
       ),
@@ -80,12 +104,12 @@ const AppBuilder = () => {
         <AppConfigForm 
           onNext={(newAppId) => {
             useAppBuilderStore.getState().setAppId(newAppId); // 更新 appId
-            setCurrentStep(3);
-            navigate(`/app-builder/3?appId=${newAppId}`); // 导航到下一步
+            setCurrentStep(4);
+            navigate(`/app-builder/4?appId=${newAppId}`); // 导航到页面构建器
           }}
           onBack={() => {
             setCurrentStep(1);
-            navigate(`/app-builder/1?workflowId=${workflowId || ''}`); // 返回上一步
+            navigate(`/app-builder/1`); // 返回工作流管理
           }}
         />
       ),
@@ -95,12 +119,12 @@ const AppBuilder = () => {
       content: (
         <PageBuilder
           onNext={() => {
-            setCurrentStep(4);
-            navigate(`/app-builder/4?appId=${appId}`); // 导航到下一步
+            setCurrentStep(5);
+            navigate(`/app-builder/5?appId=${appId}`); // 导航到运行应用
           }}
           onBack={() => {
-            setCurrentStep(2);
-            navigate(`/app-builder/2?appId=${appId}`); // 返回上一步
+            setCurrentStep(3);
+            navigate(`/app-builder/3?appId=${appId}`); // 返回应用配置
           }}
         />
       ),
@@ -200,10 +224,10 @@ const AppBuilder = () => {
         {/* 内容区域 */}
         <div className="bg-white shadow rounded-lg p-6">
           <div className="min-h-[500px]">
-            {steps[currentStep].content}
+            {steps[currentStep - 1]?.content}
           </div>
           
-          {currentStep > 0 && currentStep < steps.length - 1 && (
+          {currentStep > 1 && currentStep < steps.length - 1 && (
             <div className="mt-8 flex justify-between">
               <button
                 onClick={prev}

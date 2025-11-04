@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Rnd } from 'react-rnd';
 import { Trash2, Plus, GripVertical, Search, Filter } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import usePermissions from '@/hooks/usePermissions';
 import useTranslation from "@/hooks/useTranslation";
 import useAppBuilderStore from "@/store/useAppBuilderStore";
 import useWorkflowStore from "@/store/useWorkflowStore";
 import ParameterCascader from '@/components/ParameterCascader';
+import VisualCanvasBuilder from '@/components/VisualCanvasBuilder';
 import api from '@/api/index.js';
 
 // 可视化组件渲染器
@@ -572,73 +574,28 @@ const ComponentLibrary = ({ onAddComponent }) => {
 
 const PageBuilder = ({ onNext, onBack }) => {
   const { t } = useTranslation();
-  const {
-    appId,
-    components,
-    uiBindings,
-    paramsSchema,
-    selectedComponent,
-    addComponent,
-    updateComponent,
-    removeComponent,
-    selectComponent,
-    clearSelection,
-    bindComponentToWorkflowParam,
-    unbindComponentFromWorkflowParam,
-    getBindingForComponent,
-  } = useAppBuilderStore();
-  const { workflowId } = useWorkflowStore();
+  const location = useLocation();
+  const { workflowId, fetchWorkflow, nodesTree, parameterLookup, loading: workflowLoading } = useWorkflowStore();
+  const { paramsSchema, appId, appData } = useAppBuilderStore();
 
-  const canvasRef = useRef(null);
-
-  const cascaderOptions = useMemo(() => {
-    if (!Array.isArray(paramsSchema)) return [];
-    const grouped = new Map();
-    paramsSchema
-      .filter((param) => param.expose !== false)
-      .forEach((param) => {
-        const groupKey = param.nodeKey || param.nodeLabel || param.path.split('.')[0];
-        const groupLabel = param.nodeLabel || groupKey;
-        if (!grouped.has(groupKey)) {
-          grouped.set(groupKey, {
-            label: groupLabel,
-            value: groupKey,
-            children: [],
-          });
-        }
-        grouped.get(groupKey).children.push({
-          label: param.label || param.name || param.path,
-          value: param.path,
-          type: param.type,
-          default: param.defaultValue,
-        });
-      });
-    return Array.from(grouped.values());
-  }, [paramsSchema]);
-
+  // 从URL参数获取workflowId或appId并加载数据
   useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (canvasRef.current && !canvasRef.current.contains(event.target)) {
-        clearSelection();
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [clearSelection]);
+    const queryParams = new URLSearchParams(location.search);
+    const urlWorkflowId = queryParams.get('workflowId');
+    const urlAppId = queryParams.get('appId');
+    
+    if (urlWorkflowId && urlWorkflowId !== workflowId) {
+      // 如果URL中有workflowId且与当前store中的不同，则加载工作流
+      fetchWorkflow(urlWorkflowId);
+    } else if (urlAppId && appData && appData.workflowId) {
+      // 如果URL中有appId且应用数据已加载，则加载对应的工作流
+      fetchWorkflow(appData.workflowId);
+    }
+  }, [location.search, workflowId, fetchWorkflow, appData]);
 
   const handleSave = async () => {
-    if (!appId) {
-      console.error('App ID is missing. Cannot save.');
-      return;
-    }
     try {
-      const response = await api.patch(`/apps/${appId}`, {
-        components: components,
-        uiBindings: uiBindings,
-      });
-      console.log('App saved successfully:', response.data);
+      // 保存逻辑将在 VisualCanvasBuilder 中处理
       onNext();
     } catch (error) {
       console.error('Failed to save app:', error);
@@ -646,7 +603,15 @@ const PageBuilder = ({ onNext, onBack }) => {
     }
   };
 
-  if (!workflowId || !paramsSchema || paramsSchema.length === 0) {
+  if (workflowLoading) {
+    return (
+      <div className="text-center text-gray-500">
+        <p>正在加载工作流数据...</p>
+      </div>
+    );
+  }
+
+  if (!workflowId || !nodesTree || nodesTree.length === 0 || !parameterLookup || Object.keys(parameterLookup).length === 0) {
     return (
       <div className="text-center text-gray-500">
         <p>请先返回到应用配置步骤，确保工作流已正确配置。</p>
@@ -656,63 +621,10 @@ const PageBuilder = ({ onNext, onBack }) => {
   }
 
   return (
-    <div className="flex h-full">
-      {/* 左侧组件库 */}
-      <div className="w-64 border-r border-gray-200 bg-white flex-shrink-0">
-        <ComponentLibrary onAddComponent={addComponent} />
-      </div>
-
-      {/* 中间画布区域 */}
-      <div ref={canvasRef} className="flex-grow bg-gray-100 p-4 relative overflow-auto" onClick={clearSelection}>
-        {components.map((comp) => (
-          <Rnd
-            key={comp.id}
-            size={{ width: comp.width, height: comp.height }}
-            position={{ x: comp.x, y: comp.y }}
-            onDragStop={(e, d) => {
-              updateComponent(comp.id, { x: d.x, y: d.y });
-            }}
-            onResizeStop={(e, direction, ref, delta, position) => {
-              updateComponent(comp.id, {
-                width: ref.offsetWidth,
-                height: ref.offsetHeight,
-                x: position.x,
-                y: position.y,
-              });
-            }}
-            bounds="parent"
-            minWidth={50}
-            minHeight={50}
-            className={`border ${selectedComponent?.id === comp.id ? 'border-blue-500' : 'border-gray-300'} bg-white shadow-md rounded`}
-          >
-            <ComponentRenderer 
-              component={comp} 
-              isSelected={selectedComponent?.id === comp.id}
-              onSelect={selectComponent}
-              onUpdate={updateComponent}
-              onDelete={removeComponent}
-              onBindParam={bindComponentToWorkflowParam}
-              getBindingForComponent={getBindingForComponent}
-              cascaderOptions={cascaderOptions}
-              parameterSchemas={paramsSchema}
-            />
-          </Rnd>
-        ))}
-      </div>
-
-      <div className="absolute bottom-4 right-4 flex space-x-3">
-        <button type="button" onClick={onBack} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
-          {t('common.previous')}
-        </button>
-        <button
-          type="button"
-          onClick={handleSave}
-          className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400"
-        >
-          {t('pageBuilder.saveAndNext')}
-        </button>
-      </div>
-    </div>
+    <VisualCanvasBuilder 
+      onNext={onNext}
+      onBack={onBack}
+    />
   );
 };
 

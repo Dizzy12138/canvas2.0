@@ -4,6 +4,7 @@ const ExecutionHistorySchema = new mongoose.Schema(
   {
     appId: { type: String, required: true, index: true },
     requestId: { type: String, required: true, unique: true },
+    promptId: { type: String },
     status: { type: String, enum: ['pending', 'processing', 'success', 'failed'], default: 'pending' },
     inputs: { type: mongoose.Schema.Types.Mixed },
     outputs: { type: mongoose.Schema.Types.Mixed },
