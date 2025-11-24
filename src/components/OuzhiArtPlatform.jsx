@@ -39,6 +39,7 @@ import {
   Unlock,
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
   Trash2,
   Crown,
   Minus,
@@ -348,7 +349,9 @@ const EditableCanvas = ({
 // 生成器面板组件
 const GeneratorPanel = ({ 
   onGenerate,
-  isGenerating
+  isGenerating,
+  isCollapsed,
+  onToggleCollapse
 }) => {
   // 应用选择相关状态
   const [apps, setApps] = useState([]);
@@ -552,10 +555,31 @@ const GeneratorPanel = ({
   const uiBindings = selectedApp?.uiBindings || [];
   
   return (
-    <div className="w-80 h-full border-r bg-white flex flex-col">
-      <div className="p-4 border-b">
-        <h2 className="text-lg font-semibold text-gray-900">生成器</h2>
+    <div className={clsx(
+      "h-full border-r bg-white flex flex-col transition-all duration-300",
+      isCollapsed ? "w-12" : "w-80"
+    )}>
+      <div className="p-4 border-b flex items-center justify-between">
+        {!isCollapsed && (
+          <h2 className="text-lg font-semibold text-gray-900">生成器</h2>
+        )}
+        <button
+          onClick={onToggleCollapse}
+          className={clsx(
+            "p-1 rounded-md hover:bg-gray-100 transition-colors",
+            isCollapsed && "mx-auto"
+          )}
+          title={isCollapsed ? "展开" : "收起"}
+        >
+          {isCollapsed ? (
+            <ChevronRight className="w-5 h-5 text-gray-600" />
+          ) : (
+            <ChevronLeft className="w-5 h-5 text-gray-600" />
+          )}
+        </button>
       </div>
+      
+      {!isCollapsed && (
       
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
         {/* 应用选择下拉 */}
@@ -642,6 +666,7 @@ const GeneratorPanel = ({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };
@@ -773,7 +798,9 @@ const LayerPanel = ({
   onLayerSetBlendMode,
   onLayerGroupCreate,
   onLayerGroupDelete,
-  onLayerGroupRename
+  onLayerGroupRename,
+  isCollapsed,
+  onToggleCollapse
 }) => {
   const [editingLayerId, setEditingLayerId] = useState(null);
   const [editingName, setEditingName] = useState('');
@@ -912,54 +939,84 @@ const LayerPanel = ({
   const rootLayers = sortedLayers.filter(layer => !layer.parentId);
   
   return (
-    <div className="w-64 h-full border-l bg-white flex flex-col">
+    <div className={clsx(
+      "h-full border-l bg-white flex flex-col transition-all duration-300",
+      isCollapsed ? "w-12" : "w-64"
+    )}>
       <div className="p-3 border-b">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium text-gray-900">图层</h3>
-          <button
-            onClick={onLayerAdd}
-            className="p-1 text-gray-400 hover:text-gray-600"
-            title="添加图层"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          {isCollapsed ? (
+            <button
+              onClick={onToggleCollapse}
+              className="p-1 rounded-md hover:bg-gray-100 transition-colors mx-auto"
+              title="展开"
+            >
+              <ChevronLeft className="w-5 h-5 text-gray-600" />
+            </button>
+          ) : (
+            <>
+              <h3 className="text-sm font-medium text-gray-900">图层</h3>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={onLayerAdd}
+                  className="p-1 text-gray-400 hover:text-gray-600"
+                  title="添加图层"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+                {onToggleCollapse && (
+                  <button
+                    onClick={onToggleCollapse}
+                    className="p-1 rounded-md hover:bg-gray-100 transition-colors"
+                    title="收起"
+                  >
+                    <ChevronRight className="w-4 h-4 text-gray-600" />
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto p-2">
-        {layerGroups.map(group => renderLayerGroup(group))}
-        {[...rootLayers].reverse().map(layer => renderLayer(layer))}
-      </div>
-      
-      {/* 图层属性 */}
-      {activeLayerId && (
-        <div className="border-t p-3 space-y-3">
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">不透明度</label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={layers.find(l => l.id === activeLayerId)?.opacity || 1}
-              onChange={(e) => onLayerSetOpacity(activeLayerId, parseFloat(e.target.value))}
-              className="w-full"
-            />
+      {!isCollapsed && (
+        <>
+          <div className="flex-1 overflow-y-auto p-2">
+            {layerGroups.map(group => renderLayerGroup(group))}
+            {[...rootLayers].reverse().map(layer => renderLayer(layer))}
           </div>
           
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">混合模式</label>
-            <select
-              value={layers.find(l => l.id === activeLayerId)?.blendMode || 'normal'}
-              onChange={(e) => onLayerSetBlendMode(activeLayerId, e.target.value)}
-              className="w-full text-sm p-1 border border-gray-300 rounded"
-            >
-              {blendModes.map(mode => (
-                <option key={mode.value} value={mode.value}>{mode.label}</option>
-              ))}
-            </select>
-          </div>
-        </div>
+          {/* 图层属性 */}
+          {activeLayerId && (
+            <div className="border-t p-3 space-y-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">不透明度</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={layers.find(l => l.id === activeLayerId)?.opacity || 1}
+                  onChange={(e) => onLayerSetOpacity(activeLayerId, parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">混合模式</label>
+                <select
+                  value={layers.find(l => l.id === activeLayerId)?.blendMode || 'normal'}
+                  onChange={(e) => onLayerSetBlendMode(activeLayerId, e.target.value)}
+                  className="w-full text-sm p-1 border border-gray-300 rounded"
+                >
+                  {blendModes.map(mode => (
+                    <option key={mode.value} value={mode.value}>{mode.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -973,7 +1030,9 @@ const AIDesignerPanel = ({
   onSendMessage,
   quickQuestions,
   onRefreshQuestions,
-  isSending
+  isSending,
+  isCollapsed,
+  onToggleCollapse
 }) => {
   const messagesEndRef = useRef(null);
   
@@ -986,12 +1045,33 @@ const AIDesignerPanel = ({
   }, [messages]);
   
   return (
-    <div className="w-80 h-full border-l bg-white flex flex-col">
-      <div className="p-4 border-b">
-        <h2 className="text-lg font-semibold text-gray-900">AI 设计师</h2>
+    <div className={clsx(
+      "h-full border-l bg-white flex flex-col transition-all duration-300",
+      isCollapsed ? "w-12" : "w-80"
+    )}>
+      <div className="p-4 border-b flex items-center justify-between">
+        {!isCollapsed && (
+          <h2 className="text-lg font-semibold text-gray-900">AI 设计师</h2>
+        )}
+        <button
+          onClick={onToggleCollapse}
+          className={clsx(
+            "p-1 rounded-md hover:bg-gray-100 transition-colors",
+            isCollapsed && "mx-auto"
+          )}
+          title={isCollapsed ? "展开" : "收起"}
+        >
+          {isCollapsed ? (
+            <ChevronLeft className="w-5 h-5 text-gray-600" />
+          ) : (
+            <ChevronRight className="w-5 h-5 text-gray-600" />
+          )}
+        </button>
       </div>
       
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {!isCollapsed && (
+        <>
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* 欢迎语 */}
         <div className="bg-blue-50 rounded-lg p-3">
           <div className="flex items-start gap-2">
@@ -1106,6 +1186,8 @@ const AIDesignerPanel = ({
           </button>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 };
@@ -1202,6 +1284,11 @@ const OuzhiArtPlatform = () => {
   // 画布状态
   const [activeTool, setActiveTool] = useState('select');
   const [zoomLevel, setZoomLevel] = useState(1);
+  
+  // 边栏收起状态
+  const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
+  const [isLayerPanelCollapsed, setIsLayerPanelCollapsed] = useState(false);
+  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
   
   // AI对话状态
   const [messages, setMessages] = useState([
@@ -1605,6 +1692,8 @@ const OuzhiArtPlatform = () => {
         <GeneratorPanel
           onGenerate={handleGenerate}
           isGenerating={isGenerating}
+          isCollapsed={isLeftPanelCollapsed}
+          onToggleCollapse={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
         />
         
         {/* 画布区域 */}
@@ -1644,6 +1733,8 @@ const OuzhiArtPlatform = () => {
           onLayerGroupCreate={handleLayerGroupCreate}
           onLayerGroupDelete={handleLayerGroupDelete}
           onLayerGroupRename={handleLayerGroupRename}
+          isCollapsed={isLayerPanelCollapsed}
+          onToggleCollapse={() => setIsLayerPanelCollapsed(!isLayerPanelCollapsed)}
         />
         
         {/* AI设计师对话面板 */}
@@ -1655,6 +1746,8 @@ const OuzhiArtPlatform = () => {
           quickQuestions={quickQuestions}
           onRefreshQuestions={handleRefreshQuestions}
           isSending={isSending}
+          isCollapsed={isRightPanelCollapsed}
+          onToggleCollapse={() => setIsRightPanelCollapsed(!isRightPanelCollapsed)}
         />
       </div>
     </div>
