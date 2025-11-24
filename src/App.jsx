@@ -4,7 +4,7 @@ import AppBuilder from './components/AppBuilder';
 import OuzhiArtPlatform from './components/OuzhiArtPlatform';
 import AppRunner from './components/AppRunner'; // 导入 AppRunner
 import ServiceManagerStandalone from './components/ServiceManagerStandalone';
-import { Layout, Package, Palette, Play, Server } from 'lucide-react'; // 导入 Play 图标
+import { Layout, Package, Palette, Play, Server } from 'lucide-react'; // 导入图标
 
 function AppContent() {
   const navigate = useNavigate();
@@ -17,6 +17,10 @@ function AppContent() {
     if (location.pathname === '/ouzhi') return 'ouzhi';
     return 'appBuilder';
   });
+
+  // 欧智艺术平台相关状态
+  const [projectName, setProjectName] = useState('未命名项目');
+  const [isEditingName, setIsEditingName] = useState(false);
 
   useEffect(() => {
     if (location.pathname.startsWith('/app-builder')) {
@@ -50,48 +54,84 @@ function AppContent() {
     }
   };
 
+
   return (
     <div className="App h-screen flex flex-col">
       {/* 顶部导航栏 */}
-      <div className="p-3 border-b border-gray-200 bg-white flex items-center justify-between">
-        <h1 className="text-lg font-bold text-gray-900">AI Canvas Tool</h1>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => handleNavigation('appBuilder')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-              activeView === 'appBuilder'
-                ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
-          >
-            <Package size={16} />
-            <span>应用构建器</span>
-          </button>
-          <button
-            onClick={() => handleNavigation('appRunner')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-              activeView === 'appRunner'
-                ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
-          >
-            <Play size={16} />
-            <span>运行应用</span>
-          </button>
-          <button
-            onClick={() => handleNavigation('services')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-              activeView === 'services'
-                ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
-          >
-            <Server size={16} />
-            <span>服务管理</span>
-          </button>
-          <button
-            onClick={() => handleNavigation('ouzhi')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-              activeView === 'ouzhi'
-                ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
-          >
-            <Palette size={16} />
-            <span>欧智艺术</span>
-          </button>
+      <div className="p-3 border-b border-gray-200 bg-white flex items-center justify-between min-h-[60px] overflow-x-auto">
+        <div className="flex items-center gap-4 flex-shrink min-w-0 overflow-hidden">
+          {activeView === 'ouzhi' ? (
+            <>
+              <h1 className="text-lg font-bold text-gray-900 whitespace-nowrap flex-shrink-0">欧智艺术平台</h1>
+              <div className="flex items-center gap-2 flex-shrink min-w-0">
+                {isEditingName ? (
+                  <input
+                    type="text"
+                    value={projectName}
+                    onChange={(e) => setProjectName(e.target.value)}
+                    onBlur={() => setIsEditingName(false)}
+                    onKeyDown={(e) => e.key === 'Enter' && setIsEditingName(false)}
+                    className="px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[120px]"
+                    autoFocus
+                  />
+                ) : (
+                  <div
+                    className="text-sm font-medium text-gray-900 cursor-text hover:bg-gray-100 px-2 py-1 rounded whitespace-nowrap truncate max-w-[200px]"
+                    onDoubleClick={() => setIsEditingName(true)}
+                    title={projectName}
+                  >
+                    {projectName}
+                  </div>
+                )}
+                <button className="text-xs text-blue-600 hover:text-blue-800 whitespace-nowrap flex-shrink-0">+ 新页面</button>
+              </div>
+            </>
+          ) : (
+            <h1 className="text-lg font-bold text-gray-900 whitespace-nowrap">AI Canvas Tool</h1>
+          )}
+        </div>
+        
+        <div className="flex items-center gap-4 flex-shrink-0">
+          {/* 导航按钮 */}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => handleNavigation('appBuilder')}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors whitespace-nowrap flex-shrink-0 ${
+                activeView === 'appBuilder'
+                  ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+            >
+              <Package size={16} />
+              <span>应用构建器</span>
+            </button>
+            <button
+              onClick={() => handleNavigation('appRunner')}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors whitespace-nowrap flex-shrink-0 ${
+                activeView === 'appRunner'
+                  ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+            >
+              <Play size={16} />
+              <span>运行应用</span>
+            </button>
+            <button
+              onClick={() => handleNavigation('services')}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors whitespace-nowrap flex-shrink-0 ${
+                activeView === 'services'
+                  ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+            >
+              <Server size={16} />
+              <span>服务管理</span>
+            </button>
+            <button
+              onClick={() => handleNavigation('ouzhi')}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors whitespace-nowrap flex-shrink-0 ${
+                activeView === 'ouzhi'
+                  ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+            >
+              <Palette size={16} />
+              <span>欧智艺术</span>
+            </button>
+          </div>
+
         </div>
       </div>
 

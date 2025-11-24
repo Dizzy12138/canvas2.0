@@ -168,27 +168,54 @@ const ComponentRenderer = ({
         );
       
       case 'upload_image':
+      case 'upload_single_image':
+      case 'upload_multiple_images':
+      case 'upload_multi_media': {
+        const multiple = type === 'upload_multiple_images' || (properties?.multiple === true);
         return (
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="block text-sm font-medium text-gray-700">{label}</label>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs text-gray-500">开关</span>
-                <input type="checkbox" className="rounded" defaultChecked />
-              </div>
-            </div>
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-gray-400 transition-colors">
-              <div className="flex flex-col items-center space-y-2">
-                <div className="flex space-x-2">
-                  <Upload className="w-6 h-6 text-gray-400" />
-                  <Image className="w-6 h-6 text-gray-400" />
+            <label className="block text-sm font-medium text-gray-700">{label}</label>
+            {/* 拖拽区域 */}
+            <div
+              className="border-2 border-dashed border-gray-300 rounded-lg p-4 transition-colors text-center hover:border-gray-400 cursor-pointer bg-gray-50"
+            >
+              <input
+                type="file"
+                accept={properties?.acceptedTypes || 'image/*'}
+                multiple={multiple}
+                className="hidden"
+                id={`upload-${component.id}`}
+              />
+              <label
+                htmlFor={`upload-${component.id}`}
+                className="cursor-pointer block"
+              >
+                <div className="flex flex-col items-center gap-2">
+                  <Image className="w-8 h-8 text-gray-400" />
+                  <span className="text-sm text-gray-600">
+                    点击或拖拽文件/图层到这里
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    支持图片、音频与视频，或从图层面板拖拽图层
+                  </span>
                 </div>
-                <p className="text-sm text-gray-600">点击或拖拽上传</p>
-                <p className="text-xs text-gray-500">分辨率1000-2000区间</p>
-              </div>
+              </label>
+            </div>
+            
+            {/* 图层选择下拉（构建器中显示提示，实际功能在运行时） */}
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">或选择图层</label>
+              <select
+                className="w-full text-sm p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                disabled
+              >
+                <option value="">-- 运行时可用 --</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-1">图层选择功能在应用运行时可用</p>
             </div>
           </div>
         );
+      }
       
       case 'dropdown':
       case 'model_select':

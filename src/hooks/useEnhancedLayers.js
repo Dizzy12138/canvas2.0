@@ -46,9 +46,33 @@ export function useEnhancedLayers(initialLayers = []) {
 
   // 创建新图层
   const addLayer = useCallback((layerData = {}) => {
+    // 如果未指定名称或名称为空字符串，自动生成从1开始的递增编号
+    let defaultName = layerData.name;
+    if (!defaultName || defaultName.trim() === '') {
+      // 找到下一个可用的图层编号（从1开始）
+      const layerNamePattern = /^图层 (\d+)$/;
+      const existingNumbers = layers
+        .map(l => {
+          const match = l.name.match(layerNamePattern);
+          return match ? parseInt(match[1], 10) : 0;
+        })
+        .filter(n => n > 0)
+        .sort((a, b) => a - b);
+      
+      let nextNumber = 1;
+      for (const num of existingNumbers) {
+        if (num === nextNumber) {
+          nextNumber++;
+        } else {
+          break;
+        }
+      }
+      defaultName = `图层 ${nextNumber}`;
+    }
+    
     const newLayer = {
       id: `layer-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      name: layerData.name || `图层 ${layers.length + 1}`,
+      name: defaultName,
       visible: layerData.visible !== undefined ? layerData.visible : true,
       locked: layerData.locked || false,
       opacity: layerData.opacity !== undefined ? layerData.opacity : 1,
@@ -66,12 +90,10 @@ export function useEnhancedLayers(initialLayers = []) {
     setLayers(prev => [...prev, newLayer]);
     setActiveLayerId(newLayer.id);
     return newLayer;
-  }, [layers.length]);
+  }, [layers]);
 
   // 删除图层
   const deleteLayer = useCallback((layerId) => {
-    if (layers.length <= 1) return;
-    
     // 删除关联的蒙版
     setMasks(prev => prev.filter(mask => mask.layerId !== layerId));
     
@@ -79,9 +101,9 @@ export function useEnhancedLayers(initialLayers = []) {
     const newLayers = layers.filter(layer => layer.id !== layerId);
     setLayers(newLayers);
     
-    // 如果删除的是当前激活图层，切换到下一个图层
+    // 如果删除的是当前激活图层，切换到下一个图层或设置为 null
     if (activeLayerId === layerId) {
-      const nextActiveLayer = newLayers[newLayers.length - 1];
+      const nextActiveLayer = newLayers.length > 0 ? newLayers[newLayers.length - 1] : null;
       setActiveLayerId(nextActiveLayer ? nextActiveLayer.id : null);
     }
   }, [layers, activeLayerId]);
@@ -334,42 +356,90 @@ export function useEnhancedLayers(initialLayers = []) {
 
   // 批量合并图层
   const mergeMultipleLayers = useCallback((targetLayerId, sourceLayerIds) => {
-    // 获取目标图层
-    const targetLayer = layers.find(layer => layer.id === targetLayerId);
-    if (!targetLayer) return null;
-    
-    // 获取所有源图层
-    const sourceLayers = layers.filter(layer => 
-      sourceLayerIds.includes(layer.id) && layer.id !== targetLayerId
-    );
-    
-    if (sourceLayers.length === 0) return null;
-    
-    // 合并所有源图层的对象到目标图层
-    let allObjects = [...(targetLayer.objects || [])];
-    let layerNames = [targetLayer.name];
-    
-    sourceLayers.forEach(sourceLayer => {
-      allObjects = [...allObjects, ...(sourceLayer.objects || [])];
-      layerNames.push(sourceLayer.name);
+    // 使用函数式更新确保获取最新的 layers 状态
+    setLayers((currentLayers) => {
+      // 获取目标图层
+      const targetLayer = currentLayers.find(layer => layer.id === targetLayerId);
+      if (!targetLayer) {
+        console.warn('[合并图层] 目标图层不存在:', targetLayerId);
+        return currentLayers;
+      }
+      
+      // 获取所有源图层（包括目标图层本身，因为可能也在选中列表中）
+      const allLayersToMerge = currentLayers.filter(layer => 
+        layer.id === targetLayerId || sourceLayerIds.includes(layer.id)
+      );
+      
+      console.log('[合并图层] 开始合并:', {
+        target: targetLayerId,
+        sources: sourceLayerIds,
+        allLayersToMerge: allLayersToMerge.map(l => ({ 
+          id: l.id, 
+          name: l.name, 
+          objects: l.objects?.length || 0, 
+          shapeIds: l.shapeIds?.length || 0,
+          shapeIdsDetail: l.shapeIds || []
+        }))
+      });
+      
+      // 合并所有图层的对象到目标图层
+      let allObjects = [];
+      let allShapeIds = [];
+      let layerNames = [];
+      
+      allLayersToMerge.forEach(layer => {
+        // 合并 objects
+        if (layer.objects && layer.objects.length > 0) {
+          allObjects = [...allObjects, ...layer.objects];
+        }
+        
+        // 合并 shapeIds（重要：这是关联到 tldraw 的关键）
+        if (layer.shapeIds && layer.shapeIds.length > 0) {
+          // 去重，避免重复的 shapeId
+          layer.shapeIds.forEach(shapeId => {
+            if (!allShapeIds.includes(shapeId)) {
+              allShapeIds.push(shapeId);
+            }
+          });
+        }
+        
+        layerNames.push(layer.name);
+      });
+      
+      console.log('[合并图层] 合并后的数据:', {
+        objectsCount: allObjects.length,
+        shapeIdsCount: allShapeIds.length,
+        shapeIds: allShapeIds,
+        layerNames: layerNames
+      });
+      
+      // 更新目标图层
+      const updatedLayers = currentLayers.map(layer => {
+        if (layer.id === targetLayerId) {
+          return {
+            ...layer,
+            objects: allObjects,
+            shapeIds: allShapeIds, // 同时更新 shapeIds
+            name: `${targetLayer.name} + ${allLayersToMerge.length - 1}个图层`,
+            updatedAt: new Date()
+          };
+        }
+        return layer;
+      });
+      
+      // 删除源图层（不包括目标图层）
+      const finalLayers = updatedLayers.filter(layer => 
+        layer.id === targetLayerId || !sourceLayerIds.includes(layer.id)
+      );
+      
+      console.log('[合并图层] 合并完成，目标图层:', targetLayerId, '剩余图层数:', finalLayers.length);
+      
+      return finalLayers;
     });
     
-    // 更新目标图层
-    updateLayer(targetLayerId, (layer) => ({
-      objects: allObjects,
-      name: `${targetLayer.name} + ${sourceLayers.length}个图层`,
-      updatedAt: new Date()
-    }));
-    
-    // 删除源图层
-    sourceLayerIds
-      .filter(id => id !== targetLayerId)
-      .forEach(sourceLayerId => {
-        deleteLayer(sourceLayerId);
-      });
-    
+    // 返回目标图层 ID
     return targetLayerId;
-  }, [layers, updateLayer, deleteLayer]);
+  }, []);
 
   // 拆分图层
   const splitLayer = useCallback((layerId, splitCriteria) => {

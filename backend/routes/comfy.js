@@ -274,6 +274,69 @@ router.post('/workflows/:workflowId/validate-bindings', async (req, res, next) =
 });
 
 // 上传文件到 ComfyUI
+// 下载外部 URL 或数据 URL 到本地临时文件
+async function downloadUrlToFile(url) {
+  try {
+    let fileBuffer;
+    let filename;
+    
+    // 处理数据 URL (data:image/png;base64,...)
+    if (url.startsWith('data:')) {
+      const base64Data = url.split(',')[1];
+      fileBuffer = Buffer.from(base64Data, 'base64');
+      const mimeMatch = url.match(/data:([^;]+)/);
+      const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+      const ext = mimeType.includes('jpeg') || mimeType.includes('jpg') ? '.jpg' : 
+                  mimeType.includes('png') ? '.png' : 
+                  mimeType.includes('gif') ? '.gif' : '.png';
+      filename = `downloaded_${Date.now()}${ext}`;
+    } else {
+      // 处理 HTTP/HTTPS URL
+      console.log(`[Download] Downloading from URL: ${url}`);
+      const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
+      });
+      fileBuffer = Buffer.from(response.data);
+      
+      // 尝试从 Content-Type 或 URL 推断文件名
+      const contentType = response.headers['content-type'] || '';
+      let urlPath = '';
+      try {
+        urlPath = new URL(url).pathname;
+      } catch (urlErr) {
+        console.warn(`[Download] Invalid URL format, using default filename: ${url}`);
+        urlPath = '';
+      }
+      
+      const urlExt = urlPath ? path.extname(urlPath) : '';
+      
+      if (urlExt) {
+        filename = path.basename(urlPath);
+      } else {
+        const ext = contentType.includes('jpeg') || contentType.includes('jpg') ? '.jpg' :
+                   contentType.includes('png') ? '.png' :
+                   contentType.includes('gif') ? '.gif' : '.png';
+        filename = `downloaded_${Date.now()}${ext}`;
+      }
+    }
+    
+    // 保存到临时文件
+    const tempDir = path.join(__dirname, '../../uploads/temp');
+    await fs.mkdir(tempDir, { recursive: true });
+    const tempFilePath = path.join(tempDir, filename);
+    await fs.writeFile(tempFilePath, fileBuffer);
+    
+    console.log(`[Download] Saved to temporary file: ${tempFilePath}`);
+    return tempFilePath;
+  } catch (err) {
+    console.error(`[Download] Error downloading URL ${url}:`, err.message);
+    throw err;
+  }
+}
+
 async function uploadFileToComfyUI(filePath, service) {
   try {
     // 读取本地文件
@@ -333,19 +396,49 @@ async function uploadFileToComfyUI(filePath, service) {
     // 2. { filename: "filename.png", subfolder: "", type: "input" }
     // 3. 字符串格式的文件名
     const data = uploadResponse.data;
+    console.log(`[ComfyUI Upload] Response data:`, JSON.stringify(data, null, 2));
+    console.log(`[ComfyUI Upload] Response status:`, uploadResponse.status);
+    console.log(`[ComfyUI Upload] Original filename:`, filename);
     
     if (data && typeof data === 'object') {
-      const fileName = data.name || data.filename || filename;
-      return {
+      // 提取文件名，确保只使用文件名部分，不包含路径
+      let fileName = data.name || data.filename || filename;
+      
+      // 如果 fileName 包含路径，提取文件名部分
+      if (fileName.includes('/') || fileName.includes('\\')) {
+        fileName = path.basename(fileName);
+        console.log(`[ComfyUI Upload] Extracted filename from path: ${fileName}`);
+      }
+      
+      // 确保 subfolder 不包含完整路径
+      let subfolder = data.subfolder || '';
+      if (subfolder) {
+        // 如果 subfolder 看起来像完整路径，尝试提取子文件夹名称
+        // 但通常 ComfyUI 返回的 subfolder 应该是相对路径，如 "input" 或 ""
+        if (subfolder.startsWith('/') || subfolder.includes('ComfyUI')) {
+          console.warn(`[ComfyUI Upload] Subfolder looks like a full path: ${subfolder}, using empty string`);
+          subfolder = '';
+        }
+      }
+      
+      const result = {
         name: fileName,
-        subfolder: data.subfolder || '',
+        subfolder: subfolder,
         type: data.type || 'input'
       };
+      
+      console.log(`[ComfyUI Upload] Returning file info:`, JSON.stringify(result, null, 2));
+      return result;
     }
     
     if (typeof data === 'string') {
-      // 可能是简单的文件名
-      return { name: data, subfolder: '', type: 'input' };
+      // 可能是简单的文件名，但也要检查是否包含路径
+      let fileName = data;
+      if (fileName.includes('/') || fileName.includes('\\')) {
+        fileName = path.basename(fileName);
+      }
+      console.log(`[ComfyUI Upload] String response, using filename: ${fileName}`);
+      return { name: fileName, subfolder: '', type: 'input' };
     }
     
     // 如果都不匹配，使用原始文件名
@@ -382,42 +475,123 @@ router.post('/apps/:appId/run', async (req, res, next) => {
     
     console.log('[ComfyUI Run] Received uiInputs:', JSON.stringify(uiInputs, null, 2));
     
-    // 处理图片文件：如果 uiInputs 中有本地文件路径，先上传到 ComfyUI
+    // 处理图片文件：如果 uiInputs 中有本地文件路径或外部 URL，先上传到 ComfyUI
     const processedUiInputs = { ...uiInputs };
     for (const [key, value] of Object.entries(uiInputs || {})) {
       console.log(`[ComfyUI Run] Processing key=${key}, value type=${typeof value}, value=${value}`);
-      // 检查是否为本地文件路径（以 /uploads/ 开头）
-      if (typeof value === 'string' && value.startsWith('/uploads/')) {
+      
+      // 跳过空值
+      if (!value || (typeof value === 'string' && value.trim() === '')) {
+        console.log(`[ComfyUI Run] Skipping empty value for key=${key}`);
+        delete processedUiInputs[key];
+        continue;
+      }
+      
+      // 检查是否为字符串类型的 URL 或文件路径
+      if (typeof value === 'string') {
+        let filePath = null;
+        let isTempFile = false;
+        
         try {
-          // 构建完整文件路径
-          const filePath = path.join(__dirname, '../..', value);
-          
-          // 检查文件是否存在
-          try {
-            await fs.access(filePath);
-          } catch {
-            console.warn(`File not found: ${filePath}, skipping upload`);
+          // 情况1: 本地文件路径（以 /uploads/ 开头）
+          if (value.startsWith('/uploads/')) {
+            filePath = path.join(__dirname, '../..', value);
+            
+            // 检查文件是否存在
+            try {
+              await fs.access(filePath);
+            } catch {
+              console.warn(`File not found: ${filePath}, skipping upload`);
+              continue;
+            }
+          }
+          // 情况2: 外部 URL (HTTP/HTTPS) 或数据 URL
+          else if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:')) {
+            console.log(`[ComfyUI Run] Detected external URL or data URL, downloading...`);
+            filePath = await downloadUrlToFile(value);
+            isTempFile = true; // 标记为临时文件，后续可以清理
+          }
+          // 情况3: 其他字符串，跳过处理
+          else {
+            console.log(`[ComfyUI Run] Value is a string but not a file path or URL, skipping: ${value}`);
             continue;
           }
           
-          // 上传到 ComfyUI
-          const comfyFileInfo = await uploadFileToComfyUI(filePath, service);
-          
-          // ComfyUI 的 LoadImage 节点的 widgets_values 通常是 [filename, subfolder]
-          // 但根据不同的工作流定义，可能只需要文件名字符串
-          // 这里存储文件信息对象，在 constructExecutionPayload 中会根据节点类型处理
-          processedUiInputs[key] = {
-            __comfyUpload: true,
-            name: comfyFileInfo.name,
-            subfolder: comfyFileInfo.subfolder || '',
-            type: comfyFileInfo.type || 'input'
-          };
-          
-          console.log(`Uploaded file ${value} to ComfyUI as ${comfyFileInfo.name} (subfolder: ${comfyFileInfo.subfolder})`);
-          console.log(`[ComfyUI Run] Updated processedUiInputs[${key}] =`, JSON.stringify(processedUiInputs[key]));
+          if (filePath) {
+            // 上传到 ComfyUI
+            const comfyFileInfo = await uploadFileToComfyUI(filePath, service);
+            
+            // ComfyUI 的 LoadImage 节点的 widgets_values 通常是 [filename, subfolder]
+            // 但根据不同的工作流定义，可能只需要文件名字符串
+            // 这里存储文件信息对象，在 constructExecutionPayload 中会根据节点类型处理
+            processedUiInputs[key] = {
+              __comfyUpload: true,
+              name: comfyFileInfo.name,
+              subfolder: comfyFileInfo.subfolder || '',
+              type: comfyFileInfo.type || 'input'
+            };
+            
+            console.log(`Uploaded file ${value} to ComfyUI as ${comfyFileInfo.name} (subfolder: ${comfyFileInfo.subfolder})`);
+            console.log(`[ComfyUI Run] Updated processedUiInputs[${key}] =`, JSON.stringify(processedUiInputs[key]));
+            
+            // 如果是临时文件，可以选择删除（可选，为了节省空间）
+            // 注意：如果立即删除可能会影响后续调试，建议保留一段时间
+            // if (isTempFile) {
+            //   try {
+            //     await fs.unlink(filePath);
+            //     console.log(`[ComfyUI Run] Cleaned up temporary file: ${filePath}`);
+            //   } catch (cleanupErr) {
+            //     console.warn(`[ComfyUI Run] Failed to cleanup temp file: ${cleanupErr.message}`);
+            //   }
+            // }
+          }
         } catch (uploadErr) {
-          console.error(`Failed to upload file ${value} to ComfyUI:`, uploadErr);
+          console.error(`Failed to process file/URL ${value} to ComfyUI:`, uploadErr);
           // 继续执行，但可能ComfyUI会报错
+        }
+      }
+      // 处理数组类型的值（多个文件）
+      else if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') {
+        console.log(`[ComfyUI Run] Processing array of files/URLs for key=${key}`);
+        const processedFiles = [];
+        for (const item of value) {
+          if (typeof item === 'string') {
+            let filePath = null;
+            let isTempFile = false;
+            
+            try {
+              if (item.startsWith('/uploads/')) {
+                filePath = path.join(__dirname, '../..', item);
+                try {
+                  await fs.access(filePath);
+                } catch {
+                  console.warn(`File not found: ${filePath}, skipping`);
+                  continue;
+                }
+              } else if (item.startsWith('http://') || item.startsWith('https://') || item.startsWith('data:')) {
+                filePath = await downloadUrlToFile(item);
+                isTempFile = true;
+              } else {
+                continue;
+              }
+              
+              if (filePath) {
+                const comfyFileInfo = await uploadFileToComfyUI(filePath, service);
+                processedFiles.push({
+                  __comfyUpload: true,
+                  name: comfyFileInfo.name,
+                  subfolder: comfyFileInfo.subfolder || '',
+                  type: comfyFileInfo.type || 'input'
+                });
+              }
+            } catch (err) {
+              console.error(`Failed to process file/URL ${item}:`, err);
+            }
+          }
+        }
+        
+        if (processedFiles.length > 0) {
+          processedUiInputs[key] = processedFiles;
         }
       }
     }
@@ -435,7 +609,42 @@ router.post('/apps/:appId/run', async (req, res, next) => {
     if (comfyUIPayload && comfyUIPayload.prompt) {
       Object.entries(comfyUIPayload.prompt).forEach(([nodeId, node]) => {
         if (node.class_type && node.class_type.toLowerCase().includes('loadimage')) {
-          console.log(`[ComfyUI Run] LoadImage node ${nodeId} inputs:`, JSON.stringify(node.inputs));
+          console.log(`[ComfyUI Run] LoadImage node ${nodeId} inputs before validation:`, JSON.stringify(node.inputs));
+          
+          // 验证并修复 LoadImage 节点的输入
+          if (node.inputs && typeof node.inputs === 'object') {
+            // 检查 image 字段
+            if (node.inputs.image) {
+              let imageValue = node.inputs.image;
+              // 如果是路径，提取文件名
+              if (typeof imageValue === 'string' && (imageValue.includes('/') || imageValue.includes('\\') || imageValue.includes('ComfyUI'))) {
+                console.warn(`[ComfyUI Run] WARNING: LoadImage node ${nodeId} image value looks like a path: ${imageValue}`);
+                const path = require('path');
+                imageValue = path.basename(imageValue);
+                console.log(`[ComfyUI Run] Corrected LoadImage node ${nodeId} image to filename: ${imageValue}`);
+                node.inputs.image = imageValue;
+              }
+              // 如果是目录路径（如 /usropt1983/ComfyUI/input），应该报错
+              if (imageValue === 'input' || imageValue.startsWith('/') || imageValue.includes('ComfyUI')) {
+                console.error(`[ComfyUI Run] ERROR: LoadImage node ${nodeId} image value is invalid: ${imageValue}`);
+                throw new Error(`Invalid image value for LoadImage node ${nodeId}: ${imageValue}. Expected filename, got path.`);
+              }
+            }
+          }
+          
+          // 检查 widgets_values
+          if (node.widgets_values && Array.isArray(node.widgets_values) && node.widgets_values.length > 0) {
+            const firstWidget = node.widgets_values[0];
+            if (typeof firstWidget === 'string' && (firstWidget.includes('/') || firstWidget.includes('\\') || firstWidget.includes('ComfyUI'))) {
+              console.warn(`[ComfyUI Run] WARNING: LoadImage node ${nodeId} widgets_values[0] looks like a path: ${firstWidget}`);
+              const path = require('path');
+              node.widgets_values[0] = path.basename(firstWidget);
+              console.log(`[ComfyUI Run] Corrected LoadImage node ${nodeId} widgets_values[0] to filename: ${node.widgets_values[0]}`);
+            }
+          }
+          
+          console.log(`[ComfyUI Run] LoadImage node ${nodeId} inputs after validation:`, JSON.stringify(node.inputs));
+          console.log(`[ComfyUI Run] LoadImage node ${nodeId} widgets_values after validation:`, JSON.stringify(node.widgets_values));
         }
       });
     }

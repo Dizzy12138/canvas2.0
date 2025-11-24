@@ -1,4 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 
 const sanitizeKeyPart = (value, fallback) => {
   if (!value && fallback) {
@@ -591,16 +592,47 @@ class WorkflowService {
           if (nodeType.includes('loadimage') || nodeType.includes('load_image')) {
             // LoadImage 节点：widgets_values 通常是 [filename, subfolder] 或 ["filename", "input"]
             if (metadata.widgetIndex === 0) {
-              // 第一个参数是文件名
-              finalValue = value.name;
+              // 第一个参数是文件名，确保只使用文件名部分，不包含路径
+              let fileName = value.name || '';
+              // 如果包含路径分隔符，提取文件名部分
+              if (fileName.includes('/') || fileName.includes('\\')) {
+                fileName = path.basename(fileName);
+                console.log(`[Payload] Extracted filename from path for LoadImage widget 0: ${fileName}`);
+              }
+              // 确保不是空字符串或目录路径
+              if (!fileName || fileName === '/' || fileName === 'input' || fileName.includes('ComfyUI')) {
+                console.error(`[Payload] Invalid filename for LoadImage widget 0: ${fileName}, original value:`, value);
+                throw new Error(`Invalid filename for LoadImage: ${fileName}`);
+              }
+              finalValue = fileName;
             } else if (metadata.widgetIndex === 1 && value.subfolder) {
-              // 第二个参数是subfolder
-              finalValue = value.subfolder || 'input';
+              // 第二个参数是subfolder，确保是相对路径
+              let subfolder = value.subfolder || 'input';
+              // 如果 subfolder 包含完整路径，只使用最后一部分
+              if (subfolder.includes('/') || subfolder.includes('\\')) {
+                subfolder = path.basename(subfolder);
+                // 如果提取后是 "ComfyUI" 或 "input"，使用 "input"
+                if (subfolder === 'ComfyUI') {
+                  subfolder = 'input';
+                }
+              }
+              finalValue = subfolder;
             }
           } else {
             // 其他节点类型，直接使用文件名
-            finalValue = value.name;
+            let fileName = value.name || '';
+            if (fileName.includes('/') || fileName.includes('\\')) {
+              fileName = path.basename(fileName);
+            }
+            finalValue = fileName;
           }
+        }
+        
+        // 额外的验证：确保最终值不是目录路径
+        if (typeof finalValue === 'string' && (finalValue.startsWith('/') || finalValue.includes('ComfyUI'))) {
+          console.error(`[Payload] WARNING: Final value looks like a path, not a filename: ${finalValue}`);
+          finalValue = path.basename(finalValue);
+          console.log(`[Payload] Corrected to filename: ${finalValue}`);
         }
         
         targetNode.widgets_values[metadata.widgetIndex] = finalValue;
@@ -615,7 +647,25 @@ class WorkflowService {
             let finalValue = value;
             if (value && typeof value === 'object' && value.__comfyUpload) {
               // input.value 应该是文件名字符串
-              finalValue = value.name;
+              let fileName = value.name || '';
+              // 如果包含路径分隔符，提取文件名部分
+              if (fileName.includes('/') || fileName.includes('\\')) {
+                fileName = path.basename(fileName);
+                console.log(`[Payload] Extracted filename from path for input: ${fileName}`);
+              }
+              // 确保不是空字符串或目录路径
+              if (!fileName || fileName === '/' || fileName === 'input' || fileName.includes('ComfyUI')) {
+                console.error(`[Payload] Invalid filename for input: ${fileName}, original value:`, value);
+                throw new Error(`Invalid filename for input: ${fileName}`);
+              }
+              finalValue = fileName;
+            }
+            
+            // 额外的验证：确保最终值不是目录路径
+            if (typeof finalValue === 'string' && (finalValue.startsWith('/') || finalValue.includes('ComfyUI'))) {
+              console.error(`[Payload] WARNING: Final value looks like a path, not a filename: ${finalValue}`);
+              finalValue = path.basename(finalValue);
+              console.log(`[Payload] Corrected to filename: ${finalValue}`);
             }
             
             targetInput.value = finalValue;
@@ -623,24 +673,53 @@ class WorkflowService {
           }
         }
       } else if (metadata.source === 'input-object' && metadata.originalName) {
+        console.log(`[Payload] Entering input-object branch for ${metadata.originalName}, node ${metadata.nodeId}`);
+        console.log(`[Payload] Current targetNode.inputs:`, JSON.stringify(targetNode.inputs));
+        console.log(`[Payload] Value to set:`, JSON.stringify(value));
+        
         // 确保 inputs 是一个对象（不是数组）
         if (!targetNode.inputs || Array.isArray(targetNode.inputs)) {
+          console.log(`[Payload] Initializing inputs as object for node ${metadata.nodeId}`);
           targetNode.inputs = {};
         }
         
         // 处理 ComfyUI 上传的文件信息对象
         let finalValue = value;
         if (value && typeof value === 'object' && value.__comfyUpload) {
+          console.log(`[Payload] Processing __comfyUpload object for input-object`);
           // inputs 对象的属性值应该是文件名字符串
           // 对于 LoadImage 节点，inputs.image 需要文件名
           // 对于其他节点，也使用文件名
-          finalValue = value.name;
+          let fileName = value.name || '';
+          // 如果包含路径分隔符，提取文件名部分
+          if (fileName.includes('/') || fileName.includes('\\')) {
+            fileName = path.basename(fileName);
+            console.log(`[Payload] Extracted filename from path for input-object: ${fileName}`);
+          }
+          // 确保不是空字符串或目录路径
+          if (!fileName || fileName === '/' || fileName === 'input' || fileName.includes('ComfyUI')) {
+            console.error(`[Payload] Invalid filename for input-object: ${fileName}, original value:`, value);
+            throw new Error(`Invalid filename for input-object: ${fileName}`);
+          }
+          finalValue = fileName;
         }
         
-        console.log(`[Payload] Setting input-object ${metadata.originalName} of node ${metadata.nodeId} (${targetNode.class_type}) from value:`, value, 'to finalValue:', finalValue);
+        // 额外的验证：确保最终值不是目录路径
+        if (typeof finalValue === 'string' && (finalValue.startsWith('/') || finalValue.includes('ComfyUI'))) {
+          console.error(`[Payload] WARNING: Final value looks like a path, not a filename: ${finalValue}`);
+          finalValue = path.basename(finalValue);
+          console.log(`[Payload] Corrected to filename: ${finalValue}`);
+        }
+        
+        console.log(`[Payload] Setting input-object ${metadata.originalName} of node ${metadata.nodeId} (${targetNode.class_type}) from value:`, JSON.stringify(value), 'to finalValue:', finalValue);
         targetNode.inputs[metadata.originalName] = finalValue;
         console.log(`[Payload] Set input-object ${metadata.originalName} of node ${metadata.nodeId} (${targetNode.class_type}) to:`, finalValue);
         console.log(`[Payload] Node ${metadata.nodeId} inputs after update:`, JSON.stringify(targetNode.inputs));
+        
+        // 验证设置是否正确
+        if (targetNode.inputs[metadata.originalName] !== finalValue) {
+          console.error(`[Payload] ERROR: Failed to set input-object ${metadata.originalName}! Expected: ${finalValue}, Got: ${targetNode.inputs[metadata.originalName]}`);
+        }
       }
       } catch (err) {
         console.error(`[Payload] Error updating node ${metadata.nodeId} for path ${path}:`, err);

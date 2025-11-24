@@ -30,6 +30,8 @@ const FabricCanvas = forwardRef(({
   onMaskCreated,
   onMaskApplied,
   onCanvasReady, // 新增回调
+  onLayerReorder, // 图层顺序调整回调
+  maskExpandPixels = 0, // 蒙版外扩像素数
   // 辅助系统属性
   showGrid = false,
   showRuler = false,
@@ -171,6 +173,58 @@ const FabricCanvas = forwardRef(({
       onObjectModified?.(e.target);
     });
 
+    // 监听对象z-index变化（通过bringToFront/sendToBack），同步更新图层顺序
+    const handleObjectZIndexChange = (obj) => {
+      if (!obj.layerId || !onLayerReorder) return;
+      
+      const allObjects = canvas.getObjects();
+      const objIndex = allObjects.indexOf(obj);
+      
+      // 找到与当前对象相邻的其他图层对象
+      const prevObj = allObjects[objIndex - 1];
+      const nextObj = allObjects[objIndex + 1];
+      
+      const currentLayerIndex = layers.findIndex(l => l.id === obj.layerId);
+      if (currentLayerIndex === -1) return;
+      
+      // 检查是否需要调整图层顺序
+      if (prevObj && prevObj.layerId && prevObj.layerId !== obj.layerId) {
+        const prevLayerIndex = layers.findIndex(l => l.id === prevObj.layerId);
+        if (prevLayerIndex !== -1 && prevLayerIndex > currentLayerIndex) {
+          // 对象被移到更上层，需要调整图层顺序
+          onLayerReorder(obj.layerId, prevLayerIndex);
+        }
+      }
+      
+      if (nextObj && nextObj.layerId && nextObj.layerId !== obj.layerId) {
+        const nextLayerIndex = layers.findIndex(l => l.id === nextObj.layerId);
+        if (nextLayerIndex !== -1 && nextLayerIndex < currentLayerIndex) {
+          // 对象被移到更下层，需要调整图层顺序
+          onLayerReorder(obj.layerId, nextLayerIndex);
+        }
+      }
+    };
+
+    // 监听对象被带到前面或后面（通过右键菜单或快捷键）
+    canvas.on('object:added', (e) => {
+      // 延迟检查，确保对象已完全添加
+      setTimeout(() => {
+        if (e.target && e.target.layerId) {
+          handleObjectZIndexChange(e.target);
+        }
+      }, 0);
+    });
+
+    // 监听对象修改完成（包括z-index变化）
+    canvas.on('object:modified', (e) => {
+      // 检查对象z-index是否变化
+      if (e.target && e.target.layerId) {
+        setTimeout(() => {
+          handleObjectZIndexChange(e.target);
+        }, 0);
+      }
+    });
+
     // 添加鼠标滚轮缩放功能
     canvas.on('mouse:wheel', (opt) => {
       const delta = opt.e.deltaY;
@@ -221,9 +275,13 @@ const FabricCanvas = forwardRef(({
     
     const layer = layers.find(l => l.id === layerId);
     if (layer) {
+      // 修复：Fabric.js 中通过 opacity 控制可见性，0 表示完全隐藏
+      const targetOpacity = layer.visible ? (layer.opacity || 1) : 0;
       obj.set({
-        visible: layer.visible,
-        opacity: layer.opacity || 1
+        opacity: targetOpacity,
+        excludeFromExport: !layer.visible, // 不可见图层不导出
+        selectable: !layer.locked, // 锁定图层不可选择
+        evented: !layer.locked // 锁定图层不响应事件
       });
       fabricCanvasRef.current.renderAll();
     }
@@ -345,7 +403,9 @@ const FabricCanvas = forwardRef(({
 
       case 'mask':
       case 'clip':
-        canvas.defaultCursor = 'crosshair';
+      case 'freehand':
+      case 'brush-mask':
+        canvas.defaultCursor = activeTool === 'freehand' || activeTool === 'brush-mask' ? 'crosshair' : 'crosshair';
         canvas.selection = false;
         setupMaskTool(canvas, activeTool);
         break;
@@ -387,16 +447,17 @@ const FabricCanvas = forwardRef(({
     let origX, origY;
     let maskShape;
     let maskPath = [];
+    let isFreehand = maskType === 'freehand' || maskType === 'brush-mask';
 
     const onMouseDown = (o) => {
-      if (activeTool !== maskType) return;
+      if (activeTool !== maskType && activeTool !== 'freehand' && activeTool !== 'brush-mask') return;
       
       isDown = true;
       const pointer = canvas.getPointer(o.e);
       origX = pointer.x;
       origY = pointer.y;
 
-      if (maskType === 'mask') {
+      if (maskType === 'mask' || (maskType === 'clip' && !isFreehand)) {
         // 创建矩形蒙版
         maskShape = new fabric.Rect({
           left: origX,
@@ -413,7 +474,7 @@ const FabricCanvas = forwardRef(({
         });
         canvas.add(maskShape);
         currentMaskShape.current = maskShape;
-      } else if (maskType === 'clip') {
+      } else if (maskType === 'clip' && !isFreehand) {
         // 创建圆形蒙版
         maskShape = new fabric.Circle({
           left: origX,
@@ -429,6 +490,21 @@ const FabricCanvas = forwardRef(({
         });
         canvas.add(maskShape);
         currentMaskShape.current = maskShape;
+      } else if (isFreehand || maskType === 'freehand' || maskType === 'brush-mask') {
+        // 创建自由绘制路径（涂抹裁剪）
+        maskPath = [{ x: origX, y: origY }];
+        maskShape = new fabric.Path(`M ${origX} ${origY}`, {
+          fill: 'rgba(0, 0, 0, 0.3)',
+          stroke: '#ff0000',
+          strokeWidth: 2,
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          selectable: false,
+          isMask: true,
+          maskType: 'freehand'
+        });
+        canvas.add(maskShape);
+        currentMaskShape.current = maskShape;
       }
     };
 
@@ -437,7 +513,16 @@ const FabricCanvas = forwardRef(({
 
       const pointer = canvas.getPointer(o.e);
 
-      if (maskType === 'mask') {
+      if (isFreehand || maskType === 'freehand' || maskType === 'brush-mask') {
+        // 自由绘制路径
+        maskPath.push({ x: pointer.x, y: pointer.y });
+        const pathString = maskPath.length > 1 
+          ? `M ${maskPath[0].x} ${maskPath[0].y} L ${maskPath.slice(1).map(p => `${p.x} ${p.y}`).join(' L ')}`
+          : `M ${pointer.x} ${pointer.y}`;
+        
+        // 更新路径
+        maskShape.set({ path: pathString });
+      } else if (maskType === 'mask') {
         const width = Math.abs(pointer.x - origX);
         const height = Math.abs(pointer.y - origY);
         
@@ -471,7 +556,21 @@ const FabricCanvas = forwardRef(({
         let isValidMask = false;
         let bounds = {};
         
-        if (maskType === 'mask') {
+        if (isFreehand || maskType === 'freehand' || maskType === 'brush-mask') {
+          // 自由绘制路径验证
+          if (maskPath && maskPath.length > 2) { // 至少需要3个点形成有效路径
+            isValidMask = true;
+            // 计算路径边界
+            const xs = maskPath.map(p => p.x);
+            const ys = maskPath.map(p => p.y);
+            bounds = {
+              left: Math.min(...xs),
+              top: Math.min(...ys),
+              width: Math.max(...xs) - Math.min(...xs),
+              height: Math.max(...ys) - Math.min(...ys)
+            };
+          }
+        } else if (maskType === 'mask') {
           // 矩形蒙版验证
           const width = maskShape.width || 0;
           const height = maskShape.height || 0;
@@ -505,8 +604,19 @@ const FabricCanvas = forwardRef(({
             type: maskShape.maskType,
             layerId: currentActiveLayerId,
             bounds: bounds,
-            visible: true
+            path: isFreehand ? maskPath : null, // 保存自由绘制路径
+            visible: true,
+            inverted: false, // 默认不反向
+            expandPixels: maskExpandPixels || 0 // 内缩/外扩像素数（负值为内缩，正值为外扩）
           };
+          
+          console.log('[蒙版创建] 蒙版数据:', {
+            type: maskData.type,
+            layerId: maskData.layerId,
+            bounds: maskData.bounds,
+            expandPixels: maskData.expandPixels,
+            maskExpandPixels: maskExpandPixels
+          });
           
           maskDataRef.current.set(currentActiveLayerId, maskData);
           
@@ -516,7 +626,7 @@ const FabricCanvas = forwardRef(({
           // 通知父组件
           onMaskCreated?.(maskData);
           
-          console.log('Mask applied to layer:', currentActiveLayerId, bounds);
+          console.log('[蒙版创建] 蒙版已应用到图层:', currentActiveLayerId, '外扩像素:', maskData.expandPixels);
         } else {
           console.log('Mask too small or invalid, skipping application');
         }
@@ -535,7 +645,14 @@ const FabricCanvas = forwardRef(({
     canvas.on('mouse:down', onMouseDown);
     canvas.on('mouse:move', onMouseMove);
     canvas.on('mouse:up', onMouseUp);
-  }, [activeTool, onMaskCreated]);
+    
+    // 返回清理函数
+    return () => {
+      canvas.off('mouse:down', onMouseDown);
+      canvas.off('mouse:move', onMouseMove);
+      canvas.off('mouse:up', onMouseUp);
+    };
+  }, [activeTool, onMaskCreated, maskExpandPixels]);
 
   // 应用蒙版到图层
   const applyMaskToLayer = useCallback((canvas, layerId, maskData) => {
@@ -543,36 +660,222 @@ const FabricCanvas = forwardRef(({
     
     // 验证蒙版边界的有效性
     const bounds = maskData.bounds;
-    if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+    if (!bounds || (bounds.width <= 0 && bounds.height <= 0) && !maskData.path) {
       console.warn('Invalid mask bounds, skipping mask application:', bounds);
       return;
     }
     
+    // 内缩/外扩像素数（从maskData中获取，默认为0，负值为内缩，正值为外扩）
+    const expandPixels = maskData.expandPixels || 0;
+    
+    console.log('[蒙版应用] 应用蒙版到图层:', layerId, {
+      type: maskData.type,
+      expandPixels: expandPixels,
+      bounds: bounds,
+      objectsCount: layerObjects.length
+    });
+    
     layerObjects.forEach(obj => {
       try {
-        if (maskData.type === 'rectangle') {
-          // 矩形蒙版裁切
-          const clipPath = new fabric.Rect({
-            left: bounds.left - obj.left,
-            top: bounds.top - obj.top,
-            width: Math.max(1, bounds.width), // 确保最小宽度为1
-            height: Math.max(1, bounds.height), // 确保最小高度为1
+        if (maskData.type === 'freehand' && maskData.path) {
+          // 自由绘制路径蒙版（涂抹裁剪）
+          let pathString = maskData.path.length > 1
+            ? `M ${maskData.path[0].x} ${maskData.path[0].y} L ${maskData.path.slice(1).map(p => `${p.x} ${p.y}`).join(' L ')} Z`
+            : `M ${maskData.path[0].x} ${maskData.path[0].y} Z`;
+          
+          // 如果外扩或内缩，需要调整路径
+          if (expandPixels !== 0) {
+            // 使用Canvas API扩展/收缩路径（简化实现：通过偏移点实现）
+            // 实际应该使用更复杂的算法，这里简化处理
+            const adjustedPath = maskData.path.map((point, index) => {
+              // 计算每个点的外扩/内缩方向（简化：向外法线方向）
+              const prevPoint = index > 0 ? maskData.path[index - 1] : maskData.path[maskData.path.length - 1];
+              const nextPoint = index < maskData.path.length - 1 ? maskData.path[index + 1] : maskData.path[0];
+              
+              // 计算法线方向
+              const dx1 = point.x - prevPoint.x;
+              const dy1 = point.y - prevPoint.y;
+              const dx2 = nextPoint.x - point.x;
+              const dy2 = nextPoint.y - point.y;
+              
+              const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+              const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+              
+              // 防止除以零错误（当相邻点重合时）
+              if (len1 < 0.001 && len2 < 0.001) {
+                // 如果前后点都重合，保持原位置
+                return { x: point.x, y: point.y };
+              }
+              
+              // 平均法线方向（expandPixels为负值时向内，正值时向外）
+              let nx, ny;
+              if (len1 < 0.001) {
+                // 只使用下一个点的方向
+                nx = dy2 / len2;
+                ny = -dx2 / len2;
+              } else if (len2 < 0.001) {
+                // 只使用上一个点的方向
+                nx = dy1 / len1;
+                ny = -dx1 / len1;
+              } else {
+                // 使用两个方向的平均值
+                nx = (dy1 / len1 + dy2 / len2) / 2;
+                ny = (-dx1 / len1 - dx2 / len2) / 2;
+              }
+              
+              const nlen = Math.sqrt(nx * nx + ny * ny);
+              
+              // 防止除以零
+              if (nlen < 0.001) {
+                return { x: point.x, y: point.y };
+              }
+              
+              // 根据expandPixels的正负值决定方向
+              return {
+                x: point.x + (nx / nlen) * expandPixels,
+                y: point.y + (ny / nlen) * expandPixels
+              };
+            });
+            
+            pathString = adjustedPath.length > 1
+              ? `M ${adjustedPath[0].x} ${adjustedPath[0].y} L ${adjustedPath.slice(1).map(p => `${p.x} ${p.y}`).join(' L ')} Z`
+              : `M ${adjustedPath[0].x} ${adjustedPath[0].y} Z`;
+          }
+          
+          // 创建路径作为裁剪路径
+          const clipPath = new fabric.Path(pathString, {
             absolutePositioned: true
           });
+          
+          // 如果反向，标记对象（反向裁剪通过自定义渲染实现）
           obj.clipPath = clipPath;
+          obj.set('inverted', maskData.inverted || false);
+          
+          // 为反向裁剪添加自定义渲染方法
+          if (maskData.inverted) {
+            const originalRender = obj.render;
+            obj.render = function(ctx) {
+              // 保存上下文
+              ctx.save();
+              
+              // 创建临时 canvas 用于反向裁剪
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = this.width || canvas.width;
+              tempCanvas.height = this.height || canvas.height;
+              const tempCtx = tempCanvas.getContext('2d');
+              
+              // 先绘制完整对象
+              if (originalRender) {
+                originalRender.call(this, tempCtx);
+              }
+              
+              // 使用 destination-out 模式擦除裁剪区域
+              tempCtx.globalCompositeOperation = 'destination-out';
+              tempCtx.fillStyle = 'black';
+              
+              // 绘制裁剪路径（需要转换为相对于对象的坐标）
+              if (this.clipPath && this.clipPath.path) {
+                const path = new Path2D(this.clipPath.path);
+                tempCtx.fill(path);
+              }
+              
+              // 将结果绘制到主 canvas
+              ctx.drawImage(tempCanvas, 0, 0);
+              
+              ctx.restore();
+            };
+          }
+        } else if (maskData.type === 'rectangle') {
+          // 矩形蒙版裁切（支持内缩/外扩）
+          const adjustedWidth = Math.max(1, bounds.width + expandPixels * 2); // 外扩时增加，内缩时减少
+          const adjustedHeight = Math.max(1, bounds.height + expandPixels * 2);
+          const adjustedLeft = (bounds.left - obj.left) - expandPixels; // 外扩时向左上移动，内缩时向右下移动
+          const adjustedTop = (bounds.top - obj.top) - expandPixels;
+          
+          const clipPath = new fabric.Rect({
+            left: adjustedLeft,
+            top: adjustedTop,
+            width: adjustedWidth,
+            height: adjustedHeight,
+            absolutePositioned: true
+          });
+          
+          // 如果反向，标记对象
+          if (maskData.inverted) {
+            obj.set('inverted', true);
+            // 注意：Fabric.js 的 clipPath 不支持反向，需要通过其他方式实现
+            // 这里标记为反向，实际效果需要在渲染时处理
+          } else {
+            obj.set('inverted', false);
+          }
+          
+          obj.clipPath = clipPath;
+          obj.set('expandPixels', expandPixels); // 保存内缩/外扩像素数
         } else if (maskData.type === 'circle') {
-          // 圆形蒙版裁切
-          const radius = Math.max(0.5, bounds.width / 2); // 确保最小半径
+          // 圆形蒙版裁切（支持内缩/外扩）
+          const baseRadius = bounds.width / 2;
+          const radius = Math.max(0.5, baseRadius + expandPixels); // 外扩时增加半径，内缩时减少半径
+          const adjustedLeft = (bounds.left - obj.left) - expandPixels; // 外扩时向左上移动，内缩时向右下移动
+          const adjustedTop = (bounds.top - obj.top) - expandPixels;
+          
+          console.log('[圆形裁剪] 应用外扩/内缩:', {
+            baseRadius: baseRadius,
+            expandPixels: expandPixels,
+            finalRadius: radius,
+            adjustedLeft: adjustedLeft,
+            adjustedTop: adjustedTop
+          });
+          
           const clipPath = new fabric.Circle({
-            left: bounds.left - obj.left,
-            top: bounds.top - obj.top,
+            left: adjustedLeft,
+            top: adjustedTop,
             radius: radius,
             absolutePositioned: true
           });
+          
+          // 如果反向，标记对象（反向裁剪通过自定义渲染实现）
           obj.clipPath = clipPath;
+          obj.set('inverted', maskData.inverted || false);
+          obj.set('expandPixels', expandPixels); // 保存内缩/外扩像素数，用于渲染时透明填充
+          
+          // 为反向裁剪添加自定义渲染方法
+          if (maskData.inverted) {
+            const originalRender = obj.render;
+            obj.render = function(ctx) {
+              // 保存上下文
+              ctx.save();
+              
+              // 创建临时 canvas 用于反向裁剪
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = this.width || canvas.width;
+              tempCanvas.height = this.height || canvas.height;
+              const tempCtx = tempCanvas.getContext('2d');
+              
+              // 先绘制完整对象
+              if (originalRender) {
+                originalRender.call(this, tempCtx);
+              }
+              
+              // 使用 destination-out 模式擦除裁剪区域
+              tempCtx.globalCompositeOperation = 'destination-out';
+              tempCtx.fillStyle = 'black';
+              
+              // 绘制裁剪路径（需要转换为相对于对象的坐标）
+              if (this.clipPath && this.clipPath.path) {
+                const path = new Path2D(this.clipPath.path);
+                tempCtx.fill(path);
+              }
+              
+              // 将结果绘制到主 canvas
+              ctx.drawImage(tempCanvas, 0, 0);
+              
+              ctx.restore();
+            };
+          }
         }
         
         obj.maskId = maskData.id;
+        obj.maskInverted = maskData.inverted || false;
       } catch (error) {
         console.error('Error applying mask to object:', error, obj, maskData);
       }
@@ -978,13 +1281,31 @@ const FabricCanvas = forwardRef(({
           } else {
             // 移除蒙版
             obj.clipPath = null;
+            obj.globalCompositeOperation = 'source-over';
           }
         } catch (error) {
           console.error('Error toggling mask visibility:', error);
           // 如果出错，先移除clipPath避免渲染错误
           obj.clipPath = null;
+          obj.globalCompositeOperation = 'source-over';
         }
       });
+      
+      canvas.renderAll();
+    }
+  }, [applyMaskToLayer]);
+
+  // 切换蒙版反向（反向裁剪）
+  const toggleMaskInvert = useCallback((layerId, inverted) => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+    
+    const maskData = maskDataRef.current.get(layerId);
+    if (maskData) {
+      maskData.inverted = inverted;
+      
+      // 重新应用蒙版以更新反向状态
+      applyMaskToLayer(canvas, layerId, maskData);
       
       canvas.renderAll();
     }
@@ -1002,8 +1323,9 @@ const FabricCanvas = forwardRef(({
     createMaskForLayer,
     removeMaskFromLayerById,
     toggleMaskVisibility,
+    toggleMaskInvert,
     fabricCanvas: fabricCanvasRef.current
-  }), [exportCanvas, importCanvas, clearCanvas, deleteActiveLayer, getLayerObjectCount, reorderLayerObjects, getLayerMask, createMaskForLayer, removeMaskFromLayerById, toggleMaskVisibility]);
+  }), [exportCanvas, importCanvas, clearCanvas, deleteActiveLayer, getLayerObjectCount, reorderLayerObjects, getLayerMask, createMaskForLayer, removeMaskFromLayerById, toggleMaskVisibility, toggleMaskInvert]);
 
   return (
     <div className="relative">

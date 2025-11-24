@@ -79,6 +79,7 @@ const AICanvasToolFabric = () => {
   const [showMaskPanel, setShowMaskPanel] = useState(false);
   const [showAssistPanel, setShowAssistPanel] = useState(false);
   const [canvasReady, setCanvasReady] = useState(false); // 标记画布是否就绪
+  const [maskExpandPixels, setMaskExpandPixels] = useState(0); // 蒙版外扩像素数
   const [showServiceManager, setShowServiceManager] = useState(false);
   const [jobs, setJobs] = useState([]);
   const [workflowParams, setWorkflowParams] = useState({}); // 工作流参数状态
@@ -322,9 +323,16 @@ const AICanvasToolFabric = () => {
     }
   };
 
-  const handleMaskCreate = (layerId, shape) => {
-    console.log('Creating mask for layer:', layerId, 'with shape:', shape);
-    setActiveTool(shape === 'rectangle' ? 'mask' : 'clip');
+  const handleMaskCreate = (layerId, shape, expandPixels = 0) => {
+    console.log('[蒙版创建] 创建蒙版:', {
+      layerId: layerId,
+      shape: shape,
+      expandPixels: expandPixels
+    });
+    setActiveTool(shape === 'rectangle' ? 'mask' : shape === 'circle' ? 'clip' : 'freehand');
+    // 保存内缩/外扩像素数到状态，供FabricCanvas使用
+    setMaskExpandPixels(expandPixels);
+    console.log('[蒙版创建] maskExpandPixels 已设置为:', expandPixels);
   };
 
   const handleMaskCreated = (maskData) => {
@@ -362,6 +370,19 @@ const AICanvasToolFabric = () => {
     setLayers(prev => prev.map(layer =>
       layer.id === layerId && layer.maskData 
         ? { ...layer, maskData: { ...layer.maskData, visible } }
+        : layer
+    ));
+  };
+
+  const handleMaskInvert = (layerId, inverted) => {
+    const canvas = fabricCanvasRef.current;
+    if (canvas && canvas.toggleMaskInvert) {
+      canvas.toggleMaskInvert(layerId, inverted);
+    }
+    
+    setLayers(prev => prev.map(layer =>
+      layer.id === layerId && layer.maskData 
+        ? { ...layer, maskData: { ...layer.maskData, inverted } }
         : layer
     ));
   };
@@ -577,6 +598,8 @@ const AICanvasToolFabric = () => {
               onMaskCreated={handleMaskCreated}
               onMaskApplied={handleMaskApplied}
               onCanvasReady={handleCanvasReady}
+              onLayerReorder={handleLayerReorder}
+              maskExpandPixels={maskExpandPixels}
               showGrid={assistSettings.showGrid}
               showRuler={assistSettings.showRuler}
               showGuidelines={assistSettings.showGuidelines}
@@ -656,6 +679,7 @@ const AICanvasToolFabric = () => {
                 onMaskApply={handleMaskApplied}
                 onMaskRemove={handleMaskRemove}
                 onMaskToggle={handleMaskToggle}
+                onMaskInvert={handleMaskInvert}
               />
             )}
 

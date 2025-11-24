@@ -1,4 +1,7 @@
+// React核心
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+
+// 第三方库
 import { 
   Rocket, 
   Plus, 
@@ -29,7 +32,6 @@ import {
   Heart,
   ThumbsUp,
   ThumbsDown,
-  // 添加缺失的图标
   MousePointer2,
   Hand,
   Eraser,
@@ -48,979 +50,25 @@ import {
   Scissors,
   Package
 } from 'lucide-react';
-import api from '@/api/index.js';
 import { Tldraw, useEditor, useValue } from 'tldraw';
 import 'tldraw/tldraw.css';
 import clsx from 'clsx';
+
+// API和工具
+import api from '@/api/index.js';
 import { useEnhancedLayers } from '../hooks/useEnhancedLayers';
 import { useLayerHistory } from '../hooks/useLayerHistory';
+import logger, { createLogger } from '../utils/logger.js';
+import { DEFAULT_CONFIG, API_ENDPOINTS, DELAYS, IMAGE_SPACING, TOOL_TYPES } from '../utils/constants.js';
+import errorHandler from '../utils/errorHandler.js';
 
-// 可编辑的画布组件，暴露编辑器实例
-const EditableCanvas = ({ 
-  activeTool, 
-  onToolChange,
-  onObjectAdded,
-  onObjectModified,
-  onObjectDeleted,
-  layers,
-  toggleLayerVisibility,
-  onEditorReady,
-  generatedImages
-}) => {
-  const editor = useEditor();
-  
-  // 当编辑器准备好时，通知父组件
-  useEffect(() => {
-    if (editor && onEditorReady) {
-      onEditorReady(editor);
-    }
-  }, [editor, onEditorReady]);
-  
-  // 使用 ref 存储已处理的图片，避免重复处理
-  const processedImagesRef = useRef(new Set());
-  const isProcessingRef = useRef(false);
-  
-  // 添加生成的图片到画布
-  useEffect(() => {
-    if (!editor || !generatedImages || generatedImages.length === 0) {
-      return;
-    }
-    
-    // 如果正在处理，跳过
-    if (isProcessingRef.current) {
-      console.log('[画布] 正在处理中，跳过本次执行');
-      return;
-    }
-    
-    // 使用 async 函数处理异步操作
-    const addImagesToCanvas = async () => {
-      isProcessingRef.current = true;
-      
-      try {
-        for (let index = 0; index < generatedImages.length; index++) {
-          const imageData = generatedImages[index];
-          
-          // 构建唯一标识
-          let imageKey = '';
-          if (typeof imageData === 'string') {
-            imageKey = imageData;
-          } else if (imageData.filename) {
-            imageKey = `${imageData.filename}_${imageData.subfolder || ''}_${imageData.type || ''}`;
-          } else if (imageData.url) {
-            imageKey = imageData.url;
-          }
-          
-          // 如果已经处理过，跳过
-          if (imageKey && processedImagesRef.current.has(imageKey)) {
-            console.log(`[画布] 图片已处理，跳过: ${imageKey}`);
-            continue;
-          }
-          
-          // 标记为已处理
-          processedImagesRef.current.add(imageKey);
-        
-        try {
-          // 获取画布的视口中心位置
-          const viewportPageBounds = editor.getViewportPageBounds();
-          const centerX = viewportPageBounds.x + viewportPageBounds.width / 2;
-          const centerY = viewportPageBounds.y + viewportPageBounds.height / 2;
-          
-          // 构建图片URL
-          let imageUrl = '';
-          if (typeof imageData === 'string') {
-            imageUrl = imageData;
-          } else if (imageData.filename) {
-            // 如果是ComfyUI的输出格式，构建访问URL
-            const subfolder = imageData.subfolder || '';
-            const type = imageData.type || 'output';
-            // 构建完整URL（相对于前端）
-            const baseUrl = window.location.origin;
-            imageUrl = `${baseUrl}/api/comfy/view?filename=${encodeURIComponent(imageData.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
-          } else if (imageData.url) {
-            imageUrl = imageData.url;
-          }
-          
-          if (!imageUrl) {
-            console.warn(`[画布] 图片URL为空，跳过:`, imageData);
-            continue;
-          }
-          
-          // 计算图片位置
-          const offsetX = (index % 3) * 450; // 每行3个，间隔450
-          const offsetY = Math.floor(index / 3) * 450; // 每列间隔450
-          const targetX = centerX - 200 + offsetX;
-          const targetY = centerY - 200 + offsetY;
-          
-          // 先通过fetch获取图片，转换为File对象
-          console.log(`[画布] 开始添加图片 ${index + 1}: ${imageUrl}`);
-          
-          try {
-            const imageResponse = await fetch(imageUrl);
-            if (!imageResponse.ok) {
-              throw new Error(`获取图片失败: ${imageResponse.status}`);
-            }
-            
-            const imageBlob = await imageResponse.blob();
-            const fileName = imageUrl.split('/').pop() || `generated-${index + 1}.jpg`;
-            const file = new File([imageBlob], fileName, { type: imageBlob.type || 'image/jpeg' });
-            
-            // 记录添加前的shape数量
-            const shapesBefore = editor.getCurrentPageShapes();
-            const shapeIdsBefore = new Set(shapesBefore.map(s => s.id));
-            
-            // 使用 tldraw 的 putExternalContent 添加图片
-            await editor.putExternalContent({
-              type: 'files',
-              files: [file],
-              point: { x: targetX, y: targetY },
-            });
-            
-            // 等待一小段时间让shape创建完成
-            await new Promise(resolve => setTimeout(resolve, 100));
-            
-            // 获取新添加的shape
-            const shapesAfter = editor.getCurrentPageShapes();
-            const newShapes = shapesAfter.filter(s => !shapeIdsBefore.has(s.id));
-            
-            console.log(`[画布] 成功添加图片 ${index + 1} 到画布位置 (${targetX}, ${targetY})，创建了 ${newShapes.length} 个shape`);
-            
-            // 将新添加的shape同步到图层系统
-            if (newShapes.length > 0 && onObjectAdded) {
-              newShapes.forEach(shape => {
-                onObjectAdded({
-                  id: shape.id,
-                  type: shape.type,
-                  data: {
-                    ...shape,
-                    imageUrl: imageUrl,
-                    imageData: imageData
-                  }
-                });
-              });
-            }
-          } catch (fetchError) {
-            console.error(`[画布] 获取或添加图片失败:`, fetchError);
-            // 如果fetch失败，尝试直接使用URL创建图片形状
-            try {
-              // 使用 editor.createShape 直接创建图片形状（如果支持URL）
-              // tldraw 要求形状 ID 必须以 "shape:" 开头
-              const imageId = `shape:generated-image-${Date.now()}-${index}`;
-              
-              // 尝试使用 createShape 创建图片
-              editor.createShape({
-                id: imageId,
-                type: 'image',
-                x: targetX,
-                y: targetY,
-                props: {
-                  w: 400,
-                  h: 400,
-                  src: imageUrl,
-                },
-              });
-              
-              console.log(`[画布] 使用备选方案添加图片: ${imageId}`);
-              
-              // 同步到图层系统
-              if (onObjectAdded) {
-                const shape = editor.getShape(imageId);
-                if (shape) {
-                  onObjectAdded({
-                    id: shape.id,
-                    type: shape.type,
-                    data: {
-                      ...shape,
-                      imageUrl: imageUrl,
-                      imageData: imageData
-                    }
-                  });
-                }
-              }
-            } catch (shapeError) {
-              console.error(`[画布] 备选方案也失败:`, shapeError);
-            }
-          }
-        } catch (error) {
-          console.error(`[画布] 添加图片到画布失败 (图片 ${index}):`, error);
-        }
-      }
-    } finally {
-      // 处理完成，重置标志
-      isProcessingRef.current = false;
-    }
-    };
-    
-    // 执行异步函数
-    addImagesToCanvas();
-    
-    // 清理函数：如果组件卸载或依赖变化，取消处理
-    return () => {
-      isProcessingRef.current = false;
-    };
-  }, [editor, generatedImages]); // 移除 onObjectAdded，避免不必要的重复执行
-  
-  // 监听选中形状的变化
-  const selectedShapes = useValue('selected shapes', () => editor?.getSelectedShapes() || [], [editor]);
-  
-  // 当选中形状变化时触发回调
-  useEffect(() => {
-    if (selectedShapes.length > 0) {
-      // 触发对象修改回调
-      onObjectModified?.(selectedShapes);
-    }
-  }, [selectedShapes, onObjectModified]);
-  
-  // 监听图层可见性变化并同步到tldraw的shape（改进版，使用shapeIds优先）
-  useEffect(() => {
-    if (!editor || !layers || layers.length === 0) return;
-    
-    // 为每个图层同步可见性和锁定状态
-    layers.forEach(layer => {
-      // 优先使用shapeIds，如果不存在则使用objects中的id
-      const shapeIds = layer.shapeIds && layer.shapeIds.length > 0 
-        ? layer.shapeIds 
-        : layer.objects?.map(obj => obj.id) || [];
-      
-      shapeIds.forEach(shapeId => {
-        try {
-          const shape = editor.getShape(shapeId);
-          if (shape) {
-            // 同步锁定状态
-            if (layer.locked !== shape.isLocked) {
-              editor.updateShape({ id: shapeId, isLocked: layer.locked });
-            }
-            
-            // 同步可见性：通过opacity控制，0表示隐藏
-            // 如果图层不可见，设置opacity为0；否则使用图层的opacity值
-            const targetOpacity = layer.visible ? (layer.opacity || 1) : 0;
-            const currentOpacity = shape.opacity !== undefined ? shape.opacity : 1;
-            
-            if (Math.abs(currentOpacity - targetOpacity) > 0.01) {
-              editor.updateShape({ 
-                id: shapeId, 
-                opacity: targetOpacity 
-              });
-            }
-          }
-        } catch (error) {
-          console.warn(`[画布] 同步图层状态失败 (shapeId: ${shapeId}):`, error);
-        }
-      });
-    });
-  }, [editor, layers]);
-  
-  // 监听形状创建和删除事件
-  useEffect(() => {
-    if (!editor) return;
-    
-    const unsubscribe = editor.store.listen((changes) => {
-      // 检查是否有新添加的形状
-      if (changes.changes.added) {
-        Object.values(changes.changes.added).forEach((record) => {
-          if (record.typeName === 'shape') {
-            // 触发对象添加回调
-            onObjectAdded?.(record);
-          }
-        });
-      }
-      
-      // 检查是否有删除的形状
-      if (changes.changes.removed) {
-        Object.values(changes.changes.removed).forEach((record) => {
-          if (record.typeName === 'shape') {
-            // 获取shape ID（可能是record.id或record.id）
-            const shapeId = record.id || (typeof record === 'string' ? record : null);
-            if (shapeId) {
-              console.log('[画布] Shape deleted:', shapeId);
-              // 触发对象删除回调
-              onObjectDeleted?.(shapeId);
-            }
-          }
-        });
-      }
-    });
-    
-    return () => unsubscribe();
-  }, [editor, onObjectAdded, onObjectDeleted]);
-  
-  return null;
-};
+// 组件
+import TopNavbar from './navbar/TopNavbar.jsx';
+import CanvasToolbar from './toolbar/CanvasToolbar.jsx';
+import EditableCanvas from './canvas/EditableCanvas.jsx';
+import GeneratorPanel from './panels/GeneratorPanel.jsx';
+import LayerPanel from './LayerPanel.jsx';
 
-// 生成器面板组件
-const GeneratorPanel = ({ 
-  onGenerate,
-  isGenerating,
-  isCollapsed,
-  onToggleCollapse
-}) => {
-  // 应用选择相关状态
-  const [apps, setApps] = useState([]);
-  const [selectedAppId, setSelectedAppId] = useState('');
-  const [selectedApp, setSelectedApp] = useState(null);
-  const [loadingApps, setLoadingApps] = useState(false);
-  const [loadingApp, setLoadingApp] = useState(false);
-  
-  // 组件输入值状态
-  const [inputValues, setInputValues] = useState({});
-  
-  // 加载应用列表
-  useEffect(() => {
-    const loadApps = async () => {
-      setLoadingApps(true);
-      try {
-        const response = await api.get('/apps');
-        const appsList = response.data?.data || [];
-        setApps(appsList);
-      } catch (error) {
-        console.error('加载应用列表失败:', error);
-      } finally {
-        setLoadingApps(false);
-      }
-    };
-    loadApps();
-  }, []);
-  
-  // 当选择应用时，加载该应用的详细信息
-  useEffect(() => {
-    if (selectedAppId) {
-      const loadAppDetails = async () => {
-        setLoadingApp(true);
-        try {
-          const response = await api.get(`/apps/${selectedAppId}`);
-          const appData = response.data?.data;
-          setSelectedApp(appData);
-          // 初始化输入值
-          const initialValues = {};
-          if (appData.components && appData.uiBindings) {
-            appData.components.forEach(comp => {
-              const binding = appData.uiBindings.find(b => b.componentId === comp.id);
-              if (binding && binding.bindTo) {
-                initialValues[binding.bindTo] = binding.default || '';
-              }
-            });
-          }
-          setInputValues(initialValues);
-        } catch (error) {
-          console.error('加载应用详情失败:', error);
-          setSelectedApp(null);
-        } finally {
-          setLoadingApp(false);
-        }
-      };
-      loadAppDetails();
-    } else {
-      setSelectedApp(null);
-      setInputValues({});
-    }
-  }, [selectedAppId]);
-  
-  // 渲染组件输入控件（类似 AppRunner 的逻辑）
-  const renderComponentControl = (comp) => {
-    const binding = selectedApp?.uiBindings?.find(b => b.componentId === comp.id);
-    const path = binding?.bindTo;
-    const value = path ? inputValues[path] : undefined;
-
-    const setVal = (v) => {
-      if (!path) return;
-      setInputValues((prev) => ({ ...prev, [path]: v }));
-    };
-
-    const type = comp.type;
-    
-    // 文本输入
-    if (type === 'text' || type === 'textarea') {
-      return (
-        <textarea
-          value={value ?? ''}
-          onChange={(e) => setVal(e.target.value)}
-          placeholder={comp.properties?.placeholder || '请输入'}
-          className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
-          rows={type === 'textarea' ? 4 : 2}
-        />
-      );
-    }
-    
-    // 数字输入
-    if (type === 'number' || type === 'width' || type === 'height') {
-      return (
-        <input
-          type="number"
-          value={value ?? ''}
-          onChange={(e) => setVal(Number(e.target.value))}
-          placeholder={comp.properties?.placeholder || '请输入数字'}
-          className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          min={comp.properties?.min}
-          max={comp.properties?.max}
-        />
-      );
-    }
-    
-    // 文件上传
-    if (type === 'upload_image' || type === 'upload_single_image' || type === 'upload_multiple_images' || type === 'upload_multi_media') {
-      const multiple = type === 'upload_multiple_images' || (comp.properties?.multiple === true);
-      return (
-        <input
-          type="file"
-          accept={comp.properties?.acceptedTypes || 'image/*'}
-          multiple={multiple}
-          className="w-full text-sm"
-          onChange={(e) => setVal(multiple ? Array.from(e.target.files) : e.target.files?.[0] || null)}
-        />
-      );
-    }
-    
-    // 选择框
-    if (type === 'select') {
-      const options = comp.properties?.options || [];
-      return (
-        <select
-          value={value ?? ''}
-          onChange={(e) => setVal(e.target.value)}
-          className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-        >
-          <option value="">请选择</option>
-          {options.map((opt, idx) => (
-            <option key={idx} value={typeof opt === 'string' ? opt : opt.value}>
-              {typeof opt === 'string' ? opt : opt.label}
-            </option>
-          ))}
-        </select>
-      );
-    }
-    
-    // 默认文本输入
-    return (
-      <input
-        type="text"
-        value={value ?? ''}
-        onChange={(e) => setVal(e.target.value)}
-        placeholder={comp.properties?.placeholder || '请输入'}
-        className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-      />
-    );
-  };
-  
-  // 处理生成
-  const handleGenerate = async () => {
-    if (!selectedAppId || !selectedApp) return;
-    
-    // 先处理文件上传（如果有）
-    const processedInputValues = { ...inputValues };
-    for (const [paramPath, value] of Object.entries(inputValues)) {
-      if (value instanceof File || (Array.isArray(value) && value[0] instanceof File)) {
-        try {
-          const formData = new FormData();
-          if (Array.isArray(value)) {
-            value.forEach((file, idx) => {
-              formData.append('file', file);
-            });
-          } else {
-            formData.append('file', value);
-          }
-          
-          const uploadResponse = await api.post('/uploads', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' }
-          });
-          
-          const fileUrl = uploadResponse.data?.data?.url || uploadResponse.data?.url;
-          if (fileUrl) {
-            processedInputValues[paramPath] = fileUrl;
-          }
-        } catch (error) {
-          console.error(`文件上传失败 (${paramPath}):`, error);
-          alert(`文件上传失败: ${error.message}`);
-          return;
-        }
-      }
-    }
-    
-    // 构建 uiInputs（componentId -> value 的映射）
-    const uiInputs = {};
-    if (selectedApp.components && selectedApp.uiBindings) {
-      selectedApp.components.forEach(comp => {
-        const binding = selectedApp.uiBindings.find(b => b.componentId === comp.id);
-        if (binding && binding.bindTo && processedInputValues[binding.bindTo] !== undefined) {
-          uiInputs[comp.id] = processedInputValues[binding.bindTo];
-        }
-      });
-    }
-    
-    // 调用生成函数
-    if (onGenerate) {
-      onGenerate(selectedAppId, uiInputs);
-    }
-  };
-  
-  const components = selectedApp?.components || [];
-  const uiBindings = selectedApp?.uiBindings || [];
-  
-  return (
-    <div className={clsx(
-      "h-full border-r bg-white flex flex-col transition-all duration-300",
-      isCollapsed ? "w-12" : "w-80"
-    )}>
-      <div className="p-4 border-b flex items-center justify-between">
-        {!isCollapsed && (
-          <h2 className="text-lg font-semibold text-gray-900">生成器</h2>
-        )}
-        <button
-          onClick={onToggleCollapse}
-          className={clsx(
-            "p-1 rounded-md hover:bg-gray-100 transition-colors",
-            isCollapsed && "mx-auto"
-          )}
-          title={isCollapsed ? "展开" : "收起"}
-        >
-          {isCollapsed ? (
-            <ChevronRight className="w-5 h-5 text-gray-600" />
-          ) : (
-            <ChevronLeft className="w-5 h-5 text-gray-600" />
-          )}
-        </button>
-      </div>
-      
-      {!isCollapsed && (
-      
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        {/* 应用选择下拉 */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <Package className="w-4 h-4" />
-            工作流应用
-          </label>
-          <select
-            value={selectedAppId}
-            onChange={(e) => setSelectedAppId(e.target.value)}
-            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            disabled={loadingApps}
-          >
-            <option value="">-- 请选择应用 --</option>
-            {apps.map(app => (
-              <option key={app._id} value={app._id}>
-                {app.name || app.title || `应用 ${app._id}`}
-              </option>
-            ))}
-          </select>
-          {loadingApps && (
-            <p className="mt-1 text-xs text-gray-500">加载中...</p>
-          )}
-          {loadingApp && selectedAppId && (
-            <p className="mt-1 text-xs text-gray-500">加载应用详情...</p>
-          )}
-        </div>
-        
-        {/* 动态渲染应用的组件 */}
-        {selectedAppId && components.length > 0 && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              应用组件 ({components.length})
-            </label>
-            <div className="space-y-4">
-              {components.map((comp, index) => {
-                const binding = uiBindings.find(b => b.componentId === comp.id);
-                return (
-                  <div key={comp.id || index} className="space-y-2">
-                    <label className="block text-sm font-medium text-gray-700">
-                      {comp.label || comp.type || `组件 ${index + 1}`}
-                      {binding?.required && <span className="text-red-500 ml-1">*</span>}
-                    </label>
-                    {comp.properties?.description && (
-                      <p className="text-xs text-gray-500">{comp.properties.description}</p>
-                    )}
-                    {renderComponentControl(comp)}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-        
-        {selectedAppId && components.length === 0 && (
-          <div className="text-center py-4 text-gray-500 text-sm border border-gray-200 rounded-md">
-            该应用暂无可用组件
-          </div>
-        )}
-        
-        {!selectedAppId && (
-          <div className="text-center py-4 text-gray-500 text-sm border border-gray-200 rounded-md">
-            请先选择一个工作流应用
-          </div>
-        )}
-        
-        {/* 生成按钮 */}
-        {selectedAppId && components.length > 0 && (
-          <div className="border-t pt-4">
-            <button
-              onClick={handleGenerate}
-              disabled={isGenerating || !selectedAppId}
-              className={clsx(
-                'w-full flex items-center justify-center gap-2 p-3 rounded-md font-medium transition-colors',
-                isGenerating || !selectedAppId
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700'
-              )}
-            >
-              <Rocket className="w-4 h-4" />
-              {isGenerating ? '生成中...' : '开始生成'}
-            </button>
-          </div>
-        )}
-      </div>
-      )}
-    </div>
-  );
-};
-
-// 工具栏组件
-const CanvasToolbar = ({ 
-  activeTool, 
-  setActiveTool,
-  zoomLevel,
-  onZoomIn,
-  onZoomOut,
-  onUndo,
-  onRedo,
-  canUndo,
-  canRedo
-}) => {
-  // 只保留基本的画布工具
-  const tools = [
-    { id: 'select', icon: <MousePointer2 className="w-4 h-4" />, label: '选择' },
-    { id: 'hand', icon: <Hand className="w-4 h-4" />, label: '抓手' },
-    { id: 'rectangle', icon: <Square className="w-4 h-4" />, label: '矩形' },
-    { id: 'ellipse', icon: <Circle className="w-4 h-4" />, label: '圆形' },
-    { id: 'draw', icon: <Pen className="w-4 h-4" />, label: '画笔' },
-    { id: 'eraser', icon: <Eraser className="w-4 h-4" />, label: '橡皮擦' }
-  ];
-  
-  return (
-    <div className="flex items-center gap-2 p-2 border-b bg-white">
-      {/* 工具选择 */}
-      <div className="flex gap-1">
-        {tools.map(tool => (
-          <button
-            key={tool.id}
-            onClick={() => setActiveTool(tool.id)}
-            className={clsx(
-              'p-2 rounded-md transition-colors',
-              activeTool === tool.id
-                ? 'bg-blue-100 text-blue-600'
-                : 'text-gray-600 hover:bg-gray-100'
-            )}
-            title={tool.label}
-          >
-            {tool.icon}
-          </button>
-        ))}
-      </div>
-      
-      <div className="w-px h-6 bg-gray-200 mx-2"></div>
-      
-      {/* 编辑操作 */}
-      <button
-        onClick={onUndo}
-        disabled={!canUndo}
-        className={clsx(
-          'p-2 rounded-md transition-colors',
-          canUndo ? 'text-gray-600 hover:bg-gray-100' : 'text-gray-300 cursor-not-allowed'
-        )}
-        title="撤销"
-      >
-        <Undo className="w-4 h-4" />
-      </button>
-      <button
-        onClick={onRedo}
-        disabled={!canRedo}
-        className={clsx(
-          'p-2 rounded-md transition-colors',
-          canRedo ? 'text-gray-600 hover:bg-gray-100' : 'text-gray-300 cursor-not-allowed'
-        )}
-        title="重做"
-      >
-        <Redo className="w-4 h-4" />
-      </button>
-      
-      <div className="w-px h-6 bg-gray-200 mx-2"></div>
-      
-      {/* 对齐工具 */}
-      <div className="flex gap-1">
-        <button className="p-2 rounded-md text-gray-600 hover:bg-gray-100" title="左对齐">
-          <AlignLeft className="w-4 h-4" />
-        </button>
-        <button className="p-2 rounded-md text-gray-600 hover:bg-gray-100" title="居中对齐">
-          <AlignCenter className="w-4 h-4" />
-        </button>
-        <button className="p-2 rounded-md text-gray-600 hover:bg-gray-100" title="右对齐">
-          <AlignRight className="w-4 h-4" />
-        </button>
-      </div>
-      
-      <div className="flex-1"></div>
-      
-      {/* 缩放控制 */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onZoomOut}
-          className="p-1 rounded-md text-gray-600 hover:bg-gray-100"
-          title="缩小"
-        >
-          <ZoomOut className="w-4 h-4" />
-        </button>
-        <span className="text-sm text-gray-600 min-w-12 text-center">{Math.round(zoomLevel * 100)}%</span>
-        <button
-          onClick={onZoomIn}
-          className="p-1 rounded-md text-gray-600 hover:bg-gray-100"
-          title="放大"
-        >
-          <ZoomIn className="w-4 h-4" />
-        </button>
-        <button className="p-1 rounded-md text-gray-600 hover:bg-gray-100" title="适应屏幕">
-          <Maximize className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  );
-};
-
-// 图层管理面板组件
-const LayerPanel = ({ 
-  layers, 
-  activeLayerId, 
-  layerGroups,
-  onLayerSelect,
-  onLayerAdd,
-  onLayerDelete,
-  onLayerToggleVisibility,
-  onLayerToggleLock,
-  onLayerRename,
-  onLayerReorder,
-  onLayerSetOpacity,
-  onLayerSetBlendMode,
-  onLayerGroupCreate,
-  onLayerGroupDelete,
-  onLayerGroupRename,
-  isCollapsed,
-  onToggleCollapse
-}) => {
-  const [editingLayerId, setEditingLayerId] = useState(null);
-  const [editingName, setEditingName] = useState('');
-  const [expandedGroups, setExpandedGroups] = useState(new Set());
-  
-  const blendModes = [
-    { value: 'normal', label: '正常' },
-    { value: 'multiply', label: '正片叠底' },
-    { value: 'screen', label: '滤色' },
-    { value: 'overlay', label: '叠加' },
-    { value: 'darken', label: '变暗' },
-    { value: 'lighten', label: '变亮' }
-  ];
-  
-  const handleNameEdit = (layer) => {
-    setEditingLayerId(layer.id);
-    setEditingName(layer.name);
-  };
-  
-  const handleNameSave = () => {
-    if (editingLayerId && editingName.trim()) {
-      onLayerRename(editingLayerId, editingName.trim());
-    }
-    setEditingLayerId(null);
-    setEditingName('');
-  };
-  
-  const toggleGroup = (groupId) => {
-    const newExpanded = new Set(expandedGroups);
-    if (newExpanded.has(groupId)) {
-      newExpanded.delete(groupId);
-    } else {
-      newExpanded.add(groupId);
-    }
-    setExpandedGroups(newExpanded);
-  };
-  
-  const renderLayer = (layer, depth = 0) => {
-    return (
-      <div
-        key={layer.id}
-        className={clsx(
-          'group flex items-center p-2 rounded cursor-pointer transition-colors',
-          activeLayerId === layer.id ? 'bg-blue-100' : 'hover:bg-gray-100'
-        )}
-        style={{ paddingLeft: `${8 + depth * 16}px` }}
-        onClick={() => onLayerSelect(layer.id)}
-      >
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onLayerToggleVisibility(layer.id);
-          }}
-          className="p-1 text-gray-400 hover:text-gray-600"
-        >
-          {layer.visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-        </button>
-        
-        <div className="flex-1 min-w-0 ml-2">
-          {editingLayerId === layer.id ? (
-            <input
-              type="text"
-              value={editingName}
-              onChange={(e) => setEditingName(e.target.value)}
-              onBlur={handleNameSave}
-              onKeyDown={(e) => e.key === 'Enter' && handleNameSave()}
-              className="w-full px-1 py-0.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-              autoFocus
-            />
-          ) : (
-            <div
-              className="text-sm text-gray-900 truncate"
-              onDoubleClick={() => handleNameEdit(layer)}
-            >
-              {layer.name}
-              {/* 显示图层中的对象数量 */}
-              {layer.objects && layer.objects.length > 0 && (
-                <span className="text-xs text-gray-500 ml-2">({layer.objects.length})</span>
-              )}
-            </div>
-          )}
-        </div>
-        
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onLayerToggleLock(layer.id);
-          }}
-          className="p-1 text-gray-400 hover:text-gray-600 opacity-0 group-hover:opacity-100"
-        >
-          {layer.locked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-        </button>
-      </div>
-    );
-  };
-  
-  const renderLayerGroup = (group) => {
-    const isExpanded = expandedGroups.has(group.id);
-    const groupLayers = layers.filter(layer => layer.parentId === group.id);
-    
-    return (
-      <div key={group.id} className="mb-1">
-        <div
-          className="group flex items-center p-2 rounded cursor-pointer hover:bg-gray-100"
-          onClick={() => toggleGroup(group.id)}
-        >
-          <button className="p-1 text-gray-400">
-            {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-          </button>
-          <div className="flex-1 min-w-0 ml-2">
-            <div className="text-sm font-medium text-gray-900 truncate">{group.name}</div>
-          </div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onLayerGroupDelete(group.id);
-            }}
-            className="p-1 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-        </div>
-        
-        {isExpanded && (
-          <div className="ml-4">
-            {groupLayers.map(layer => renderLayer(layer, 1))}
-          </div>
-        )}
-      </div>
-    );
-  };
-  
-  // 按orderIndex排序图层
-  const sortedLayers = [...layers].sort((a, b) => a.orderIndex - b.orderIndex);
-  // 分离根图层（没有parentId的图层）
-  const rootLayers = sortedLayers.filter(layer => !layer.parentId);
-  
-  return (
-    <div className={clsx(
-      "h-full border-l bg-white flex flex-col transition-all duration-300",
-      isCollapsed ? "w-12" : "w-64"
-    )}>
-      <div className="p-3 border-b">
-        <div className="flex items-center justify-between">
-          {isCollapsed ? (
-            <button
-              onClick={onToggleCollapse}
-              className="p-1 rounded-md hover:bg-gray-100 transition-colors mx-auto"
-              title="展开"
-            >
-              <ChevronLeft className="w-5 h-5 text-gray-600" />
-            </button>
-          ) : (
-            <>
-              <h3 className="text-sm font-medium text-gray-900">图层</h3>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={onLayerAdd}
-                  className="p-1 text-gray-400 hover:text-gray-600"
-                  title="添加图层"
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
-                {onToggleCollapse && (
-                  <button
-                    onClick={onToggleCollapse}
-                    className="p-1 rounded-md hover:bg-gray-100 transition-colors"
-                    title="收起"
-                  >
-                    <ChevronRight className="w-4 h-4 text-gray-600" />
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-      
-      {!isCollapsed && (
-        <>
-          <div className="flex-1 overflow-y-auto p-2">
-            {layerGroups.map(group => renderLayerGroup(group))}
-            {[...rootLayers].reverse().map(layer => renderLayer(layer))}
-          </div>
-          
-          {/* 图层属性 */}
-          {activeLayerId && (
-            <div className="border-t p-3 space-y-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">不透明度</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={layers.find(l => l.id === activeLayerId)?.opacity || 1}
-                  onChange={(e) => onLayerSetOpacity(activeLayerId, parseFloat(e.target.value))}
-                  className="w-full"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">混合模式</label>
-                <select
-                  value={layers.find(l => l.id === activeLayerId)?.blendMode || 'normal'}
-                  onChange={(e) => onLayerSetBlendMode(activeLayerId, e.target.value)}
-                  className="w-full text-sm p-1 border border-gray-300 rounded"
-                >
-                  {blendModes.map(mode => (
-                    <option key={mode.value} value={mode.value}>{mode.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-};
 
 // AI设计师对话面板组件
 const AIDesignerPanel = ({ 
@@ -1051,7 +99,7 @@ const AIDesignerPanel = ({
     )}>
       <div className="p-4 border-b flex items-center justify-between">
         {!isCollapsed && (
-          <h2 className="text-lg font-semibold text-gray-900">AI 设计师</h2>
+        <h2 className="text-lg font-semibold text-gray-900">AI 设计师</h2>
         )}
         <button
           onClick={onToggleCollapse}
@@ -1071,7 +119,7 @@ const AIDesignerPanel = ({
       
       {!isCollapsed && (
         <>
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* 欢迎语 */}
         <div className="bg-blue-50 rounded-lg p-3">
           <div className="flex items-start gap-2">
@@ -1192,85 +240,6 @@ const AIDesignerPanel = ({
   );
 };
 
-// 顶部导航栏组件
-const TopNavbar = ({ 
-  projectName, 
-  setProjectName,
-  isEditingName,
-  setIsEditingName,
-  points,
-  memberStatus,
-  onOpenMember,
-  onNotificationClick,
-  onProfileClick
-}) => {
-  return (
-    <div className="flex items-center justify-between p-3 border-b bg-white">
-      <div className="flex items-center gap-4">
-        <h1 className="text-lg font-bold text-gray-900">欧智艺术平台</h1>
-        <div className="flex items-center gap-2">
-          {isEditingName ? (
-            <input
-              type="text"
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              onBlur={() => setIsEditingName(false)}
-              onKeyDown={(e) => e.key === 'Enter' && setIsEditingName(false)}
-              className="px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-              autoFocus
-            />
-          ) : (
-            <div
-              className="text-sm font-medium text-gray-900 cursor-text hover:bg-gray-100 px-2 py-1 rounded"
-              onDoubleClick={() => setIsEditingName(true)}
-            >
-              {projectName}
-            </div>
-          )}
-          <button className="text-xs text-blue-600 hover:text-blue-800">+ 新页面</button>
-        </div>
-      </div>
-      
-      <div className="flex items-center gap-4">
-        {/* 积分与会员 */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 text-sm">
-            <Star className="w-4 h-4 text-yellow-500" />
-            <span className="font-medium">{points}</span>
-          </div>
-          <div className="flex items-center gap-1 text-sm">
-            <Crown className="w-4 h-4 text-orange-500" />
-            <span className="font-medium">{memberStatus}</span>
-          </div>
-          <button
-            onClick={onOpenMember}
-            className="px-3 py-1 text-sm bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-md hover:from-orange-600 hover:to-red-600"
-          >
-            开通会员
-          </button>
-        </div>
-        
-        {/* 通知与个人中心 */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onNotificationClick}
-            className="p-2 text-gray-600 hover:text-gray-900 relative"
-          >
-            <Bell className="w-5 h-5" />
-            <div className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></div>
-          </button>
-          <button
-            onClick={onProfileClick}
-            className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center"
-          >
-            <User className="w-4 h-4 text-gray-600" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // 主组件
 const OuzhiArtPlatform = () => {
   // 项目状态
@@ -1279,7 +248,16 @@ const OuzhiArtPlatform = () => {
   
   // 生成器状态
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isEditorInitialized, setIsEditorInitialized] = useState(false);
   const [generatedImages, setGeneratedImages] = useState([]);
+  // 用于跟踪生成过程中创建的图层ID，在所有图片添加完成后清除多选状态
+  const generatedLayerIdsRef = useRef(new Set());
+  // 用于保存最新的layers状态，避免闭包问题（先初始化为null，稍后更新）
+  const layersRef = useRef(null);
+  // 用于保存 assetId 到文件名的映射（用于图层命名）
+  const assetFileNameMapRef = useRef(new Map());
+  // 记录 assetId -> 图层ID 列表映射
+  const assetLayerMapRef = useRef(new Map());
   
   // 画布状态
   const [activeTool, setActiveTool] = useState('select');
@@ -1324,10 +302,15 @@ const OuzhiArtPlatform = () => {
     reorderLayer,
     createLayerGroup,
     deleteLayerGroup,
-    renameLayerGroup
-  } = useEnhancedLayers([
-    { id: 'layer-1', name: '图层 1', visible: true, locked: false, opacity: 1, blendMode: 'normal', objects: [], orderIndex: 0 }
-  ]);
+    renameLayerGroup,
+    mergeMultipleLayers
+  } = useEnhancedLayers([]);
+  
+  // 更新 layersRef，确保始终使用最新的 layers
+  layersRef.current = layers;
+  
+  // 多选图层状态
+  const [selectedLayerIds, setSelectedLayerIds] = useState(new Set());
   
   // 使用图层历史hook
   const { 
@@ -1339,9 +322,103 @@ const OuzhiArtPlatform = () => {
     canRedo
   } = useLayerHistory(50);
   
+  // 生成不重复的图层名称（例如同名时追加 "(2)")
+  const getUniqueLayerName = useCallback((baseName, excludeLayerId = null) => {
+    if (!baseName) return baseName;
+
+    const currentLayers = layersRef.current || layers;
+    const existingNames = new Set(
+      currentLayers
+        .filter(layer => layer.id !== excludeLayerId)
+        .map(layer => layer.name)
+        .filter(Boolean)
+    );
+
+    if (!existingNames.has(baseName)) {
+      return baseName;
+    }
+
+    let counter = 2;
+    while (existingNames.has(`${baseName} (${counter})`)) {
+      counter += 1;
+    }
+
+    return `${baseName} (${counter})`;
+  }, [layers]);
+  
+  // 统一更新使用同一 asset 的图层名称（生成文件名 (2)/(3) ...）
+  const updateLayerNamesForAsset = useCallback((assetId, baseName) => {
+    if (!assetId || !baseName) return;
+    const currentLayers = layersRef.current || [];
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    // 先根据映射获取关联图层ID
+    let relatedLayerIds = assetLayerMapRef.current.get(assetId);
+    if (relatedLayerIds && relatedLayerIds.length > 0) {
+      relatedLayerIds = relatedLayerIds.filter(id => currentLayers.some(layer => layer.id === id));
+      assetLayerMapRef.current.set(assetId, relatedLayerIds);
+    }
+
+    let relatedLayers = [];
+    if (relatedLayerIds && relatedLayerIds.length > 0) {
+      relatedLayers = relatedLayerIds
+        .map(layerId => currentLayers.find(layer => layer.id === layerId))
+        .filter(Boolean);
+    }
+
+    // 如果映射中还没有，退回到遍历匹配 assetId
+    if (relatedLayers.length === 0) {
+      relatedLayers = currentLayers
+        .filter(layer => Array.isArray(layer.shapeIds) && layer.shapeIds.length > 0)
+        .filter(layer => {
+          return layer.shapeIds.some(shapeId => {
+            try {
+              const shape = editor.getShape(shapeId);
+              return shape?.props?.assetId === assetId;
+            } catch {
+              return false;
+            }
+          });
+        });
+
+      if (relatedLayers.length > 0) {
+        assetLayerMapRef.current.set(assetId, relatedLayers.map(layer => layer.id));
+      }
+    }
+
+    if (relatedLayers.length === 0) {
+      console.info('[LayerNameDebug] updateLayerNamesForAsset: 无关联图层', assetId);
+      return;
+    }
+
+    relatedLayers.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeA - timeB;
+    });
+
+    relatedLayers.forEach((layer, index) => {
+      const numberedName = index === 0 ? baseName : `${baseName} (${index + 1})`;
+      const uniqueName = getUniqueLayerName(numberedName, layer.id);
+      if (layer.name !== uniqueName) {
+        logger.debug('[updateLayerNamesForAsset] 更新图层名称:', {
+          layerId: layer.id,
+          oldName: layer.name,
+          newName: uniqueName,
+          index
+        });
+        console.info('[LayerNameDebug] updateLayerNamesForAsset: rename layer', layer.id, layer.name, '->', uniqueName);
+        renameLayer(layer.id, uniqueName);
+      }
+    });
+  }, [getUniqueLayerName, renameLayer]);
+  
   // 对象添加处理 - 为每个内容创建独立图层（像PS一样）
   const handleObjectAdded = useCallback((obj) => {
-    console.log('Object added:', obj);
+    logger.debug('Object added:', obj);
+    logger.debug('Object data:', obj.data);
+    logger.debug('ImageData:', obj.data?.imageData);
     
     const objectData = {
       id: obj.id,
@@ -1350,12 +427,258 @@ const OuzhiArtPlatform = () => {
       timestamp: Date.now()
     };
     
+    const assetId = obj.data?.props?.assetId;
+    // 判断是否是生成的图片（更准确的判断）
+    // 生成的图片应该满足以下条件之一：
+    // 1. imageData 存在且有 filename 属性（ComfyUI 输出格式）
+    // 2. imageUrl 包含 /api/comfy/view（ComfyUI 生成的图片URL）
+    const isGeneratedImage = (obj.data?.imageData && typeof obj.data.imageData === 'object' && obj.data.imageData.filename) ||
+                              (obj.data?.imageUrl && typeof obj.data.imageUrl === 'string' && obj.data.imageUrl.includes('/api/comfy/view'));
+    
     // 为每个内容创建独立图层
-    const layerName = obj.data?.imageData?.filename 
-      ? `生成图片 ${obj.data.imageData.filename}` 
-      : obj.type === 'image' 
-        ? '图片图层' 
-        : `${obj.type}图层`;
+    let layerName = '';
+    if (isGeneratedImage && obj.data?.imageData?.filename) {
+      // 生成的图片，使用文件名
+      const fileBaseName = obj.data.imageData.filename;
+      const baseName = `生成图片 ${fileBaseName}`;
+      layerName = getUniqueLayerName(baseName);
+      if (assetId) {
+        setTimeout(() => updateLayerNamesForAsset(assetId, fileBaseName), 0);
+      }
+    } else if (obj.type === 'image') {
+      // 普通图片图层，尝试从多个来源提取文件名
+      let fileName = null;
+      
+      logger.debug(`[图层创建] 尝试提取文件名，obj.data:`, obj.data);
+      logger.debug(`[图层创建] obj.data.props:`, obj.data?.props);
+      console.info('[LayerNameDebug] shape added', obj);
+      
+      // 1. 首先检查文件名映射（如果之前保存过）
+      if (assetId && assetFileNameMapRef.current.has(assetId)) {
+        fileName = assetFileNameMapRef.current.get(assetId);
+        logger.debug(`[图层创建] 从文件名映射获取:`, fileName);
+        console.info('[LayerNameDebug] filename from map', fileName);
+      }
+      
+      // 2. 尝试从 asset 中获取文件名（立即尝试，不等待延迟）
+      if (!fileName && assetId && editorRef.current) {
+        try {
+          let asset = null;
+          // 先尝试从映射中获取（如果之前已经保存过）
+          if (assetFileNameMapRef.current.has(assetId)) {
+            fileName = assetFileNameMapRef.current.get(assetId);
+            console.info('[LayerNameDebug] filename from map (immediate)', fileName);
+          } else {
+            // 尝试从 store 中获取 asset
+            if (editorRef.current.getAsset) {
+              asset = editorRef.current.getAsset(assetId);
+              logger.debug(`[图层创建] 通过 getAsset 获取 asset:`, asset);
+              console.info('[LayerNameDebug] asset via getAsset', asset);
+            } else if (editorRef.current.store) {
+              const store = editorRef.current.store;
+              if (store.get) {
+                asset = store.get(assetId);
+              } else if (store.queryRecords) {
+                const records = store.queryRecords('asset', () => true);
+                asset = records.find(r => r.id === assetId);
+              }
+              logger.debug(`[图层创建] 通过 store 获取 asset:`, asset);
+              console.info('[LayerNameDebug] asset via store', asset);
+            }
+            
+            if (asset) {
+              // 检查 asset 的所有可能属性
+              const assetDebugInfo = {
+                id: asset.id,
+                type: asset.type,
+                typeName: asset.typeName,
+                props: asset.props,
+                meta: asset.meta
+              };
+              logger.debug(`[图层创建] asset 完整结构:`, assetDebugInfo);
+              console.info('[LayerNameDebug] asset debug info', assetDebugInfo);
+              
+              // 优先使用 asset.props.name（tldraw 可能保存文件名）
+              if (asset.props?.name) {
+                fileName = asset.props.name;
+                logger.debug(`[图层创建] 从 asset.props.name 获取文件名:`, fileName);
+                console.info('[LayerNameDebug] filename from asset.props.name', fileName);
+                // 保存到映射中，以便后续使用
+                assetFileNameMapRef.current.set(assetId, fileName);
+              }
+              // 其次尝试从 asset.props.src 中提取
+              else if (asset.props?.src) {
+                const url = asset.props.src;
+                logger.debug(`[图层创建] 从 asset.props.src 提取文件名:`, url);
+                // 尝试多种 URL 格式
+                const patterns = [
+                  /\/([^\/\?]+)\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?|$)/i,  // 标准文件扩展名
+                  /\/([^\/\?]+)(\?|$)/,  // 任何文件名
+                  /filename=([^&]+)/,  // 查询参数中的 filename
+                ];
+                
+                for (const pattern of patterns) {
+                  const match = url.match(pattern);
+                  if (match) {
+                    fileName = decodeURIComponent(match[1]);
+                    logger.debug(`[图层创建] 匹配到文件名:`, fileName);
+                    console.info('[LayerNameDebug] filename from asset.props.src', fileName);
+                    // 保存到映射中
+                    assetFileNameMapRef.current.set(assetId, fileName);
+                    break;
+                  }
+                }
+              }
+              // 检查 asset.meta 中是否有文件名
+              if (!fileName && asset.meta?.name) {
+                fileName = asset.meta.name;
+                logger.debug(`[图层创建] 从 asset.meta.name 获取文件名:`, fileName);
+                console.info('[LayerNameDebug] filename from asset.meta.name', fileName);
+                // 保存到映射中
+                assetFileNameMapRef.current.set(assetId, fileName);
+              }
+            }
+          }
+        } catch (error) {
+          logger.warn(`[图层创建] 无法从 asset 获取文件名:`, error);
+        }
+      }
+      
+      // 3. 如果 asset 中没有，尝试从 shape.props.src 中提取
+      if (!fileName && obj.data?.props?.src) {
+        const url = obj.data.props.src;
+        logger.debug(`[图层创建] 从 shape.props.src 提取文件名:`, url);
+        const patterns = [
+          /\/([^\/\?]+)\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?|$)/i,
+          /\/([^\/\?]+)(\?|$)/,
+          /filename=([^&]+)/,
+        ];
+        
+        for (const pattern of patterns) {
+          const match = url.match(pattern);
+          if (match) {
+            fileName = decodeURIComponent(match[1]);
+            logger.debug(`[图层创建] 从 shape.props.src 匹配到文件名:`, fileName);
+            break;
+          }
+        }
+      }
+      
+      // 4. 如果还是没有，尝试从 imageUrl 中提取
+      if (!fileName && obj.data?.imageUrl) {
+        const url = obj.data.imageUrl;
+        logger.debug(`[图层创建] 从 imageUrl 提取文件名:`, url);
+        const patterns = [
+          /\/([^\/\?]+)\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?|$)/i,
+          /\/([^\/\?]+)(\?|$)/,
+          /filename=([^&]+)/,
+        ];
+        
+        for (const pattern of patterns) {
+          const match = url.match(pattern);
+          if (match) {
+            fileName = decodeURIComponent(match[1]);
+            logger.debug(`[图层创建] 从 imageUrl 匹配到文件名:`, fileName);
+            break;
+          }
+        }
+      }
+      
+      // 5. 如果提取到了文件名，使用文件名；否则使用默认命名
+      if (fileName) {
+        // 移除可能的查询参数和哈希，保留文件扩展名
+        fileName = fileName.split('?')[0].split('#')[0];
+        // 确保文件名不为空且不是纯数字（避免与"图层 1"格式冲突）
+        if (fileName && !/^\d+$/.test(fileName)) {
+          layerName = getUniqueLayerName(fileName);
+          logger.debug(`[图层创建] 使用提取的文件名:`, layerName);
+          console.info('[LayerNameDebug] final layer name from file', layerName);
+        } else {
+          layerName = '';
+          logger.debug(`[图层创建] 文件名无效，使用默认命名`);
+          console.info('[LayerNameDebug] filename invalid, fallback to default');
+        }
+      } else {
+        // 如果找不到文件名但有 assetId，延迟检查（asset 监听器可能稍后才保存映射）
+        if (assetId) {
+          logger.debug(`[图层创建] 未找到文件名，但有 assetId，延迟检查:`, assetId);
+          console.info('[LayerNameDebug] no filename but has assetId, will retry', assetId);
+          // 延迟检查映射和 asset（asset 监听器可能在 shape 创建之后才触发）
+          setTimeout(() => {
+            let delayedFileName = null;
+            
+            // 再次检查映射
+            if (assetFileNameMapRef.current.has(assetId)) {
+              delayedFileName = assetFileNameMapRef.current.get(assetId);
+              console.info('[LayerNameDebug] delayed check: filename from map', delayedFileName);
+            }
+            
+            // 如果映射中还没有，直接查询 asset
+            if (!delayedFileName && editorRef.current) {
+              try {
+                let asset = null;
+                if (editorRef.current.getAsset) {
+                  asset = editorRef.current.getAsset(assetId);
+                } else if (editorRef.current.store) {
+                  const store = editorRef.current.store;
+                  if (store.get) {
+                    asset = store.get(assetId);
+                  } else if (store.queryRecords) {
+                    const records = store.queryRecords('asset', () => true);
+                    asset = records.find(r => r.id === assetId);
+                  }
+                }
+                
+                if (asset) {
+                  if (asset.props?.name) {
+                    delayedFileName = asset.props.name;
+                  } else if (asset.props?.src) {
+                    const url = asset.props.src;
+                    const patterns = [
+                      /\/([^\/\?]+)\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?|$)/i,
+                      /\/([^\/\?]+)(\?|$)/,
+                      /filename=([^&]+)/,
+                    ];
+                    for (const pattern of patterns) {
+                      const match = url.match(pattern);
+                      if (match) {
+                        delayedFileName = decodeURIComponent(match[1]);
+                        break;
+                      }
+                    }
+                  }
+                  
+                  if (delayedFileName) {
+                    delayedFileName = delayedFileName.split('?')[0].split('#')[0];
+                    assetFileNameMapRef.current.set(assetId, delayedFileName);
+                    updateLayerNamesForAsset(assetId, delayedFileName);
+                  }
+                }
+              } catch (error) {
+                logger.warn(`[图层创建] 延迟检查 asset 失败:`, error);
+              }
+            }
+            
+            // 如果找到了文件名，更新图层名称
+            if (delayedFileName && !/^\d+$/.test(delayedFileName)) {
+              updateLayerNamesForAsset(assetId, delayedFileName);
+            } else {
+              console.info('[LayerNameDebug] delayed check: no valid filename found', delayedFileName);
+            }
+          }, 500); // 延迟 500ms，等待 asset 监听器处理（同时上传多个文件时需要更长时间）
+        }
+        
+        // 使用默认命名（addLayer 会自动处理递增编号）
+        layerName = '';
+        logger.debug(`[图层创建] 未提取到文件名，使用默认命名`);
+        console.info('[LayerNameDebug] no filename found, fallback to default');
+      }
+    } else {
+      // 其他类型的图层，使用默认命名（addLayer 会自动处理递增编号）
+      layerName = ''; // 空字符串，让 addLayer 使用默认命名
+    }
+    
+    logger.debug(`[图层创建] 类型: ${isGeneratedImage ? '生成图片' : obj.type === 'image' ? '上传图片' : obj.type}, 名称: ${layerName || '(使用默认命名)'}`);
     
     const newLayer = addLayer({
       name: layerName,
@@ -1368,20 +691,141 @@ const OuzhiArtPlatform = () => {
       shapeIds: [obj.id]
     });
     
-    console.log('Created new layer for object:', newLayer.id, 'object:', objectData);
+    logger.debug('Created new layer for object:', newLayer.id, 'object:', objectData);
+    
+    // 记录 asset 与图层的映射
+    if (assetId) {
+      const layerIds = assetLayerMapRef.current.get(assetId) || [];
+      if (!layerIds.includes(newLayer.id)) {
+        assetLayerMapRef.current.set(assetId, [...layerIds, newLayer.id]);
+        console.info('[LayerNameDebug] 记录 asset 与图层映射', assetId, newLayer.id, 'total layers:', layerIds.length + 1);
+      }
+      // 如果已经拿到文件名，立刻尝试命名（延迟一点确保图层已创建）
+      const knownName = assetFileNameMapRef.current.get(assetId);
+      if (knownName) {
+        console.info('[LayerNameDebug] 图层创建后立即更新名称', assetId, knownName, newLayer.id);
+        setTimeout(() => {
+          updateLayerNamesForAsset(assetId, knownName);
+        }, 50);
+      } else {
+        // 即使没有文件名，也延迟检查一次（asset 监听器可能稍后才保存）
+        setTimeout(() => {
+          const delayedKnownName = assetFileNameMapRef.current.get(assetId);
+          if (delayedKnownName) {
+            console.info('[LayerNameDebug] 延迟检查发现文件名，更新图层名称', assetId, delayedKnownName);
+            updateLayerNamesForAsset(assetId, delayedKnownName);
+          }
+        }, 600);
+      }
+    }
     
     // 激活新创建的图层
     setActiveLayerId(newLayer.id);
-  }, [addLayer, setActiveLayerId]);
+    
+    if (isGeneratedImage) {
+      // 记录生成过程中创建的图层ID
+      generatedLayerIdsRef.current.add(newLayer.id);
+      
+      // 如果是生成过程中的图片，不立即设置选中状态
+      // 等待所有图片添加完成后，在 useEffect 中统一处理
+      logger.debug(`[生成图片] 记录图层 ${newLayer.id}，等待所有图片添加完成`);
+    } else {
+      // 非生成图片，立即选中
+      setSelectedLayerIds(new Set([newLayer.id]));
+    }
+  }, [addLayer, setActiveLayerId, renameLayer, getUniqueLayerName, updateLayerNamesForAsset]);
   
-  // 对象修改处理
-  const handleObjectModified = (objs) => {
-    console.log('Objects modified:', objs);
-  };
+  // 存储编辑器实例的引用（需要在handleObjectModified之前定义）
+  const editorRef = useRef(null);
+  
+  // 用于防止循环更新的 ref
+  const isSyncingZIndexRef = useRef(false);
+  
+  // 图层重排序处理函数（需要在handleObjectModified之前定义）
+  const handleLayerReorder = useCallback((layerId, newIndex) => {
+    reorderLayer(layerId, newIndex);
+  }, [reorderLayer]);
+  
+  // 对象修改处理 - 检测z-index变化并同步到图层排序
+  const handleObjectModified = useCallback((objs) => {
+    if (!editorRef.current || !objs || objs.length === 0) return;
+    if (isSyncingZIndexRef.current) return; // 防止循环更新
+    
+    logger.debug('Objects modified:', objs);
+    
+    // 获取所有shape的当前z-index顺序
+    const allShapes = editorRef.current.getCurrentPageShapes();
+    
+    // 按z-index排序（从下到上）
+    const sortedShapes = [...allShapes].sort((a, b) => {
+      // tldraw中shape的index属性表示z-index
+      const indexA = allShapes.indexOf(a);
+      const indexB = allShapes.indexOf(b);
+      return indexA - indexB;
+    });
+    
+    // 检查是否有shape的z-index发生了变化
+    let hasZIndexChange = false;
+    const layerShapeMap = new Map(); // 图层ID -> shape数组
+    
+    sortedShapes.forEach((shape, index) => {
+      // 找到包含该shape的图层
+      const layer = layers.find(l => {
+        const shapeIds = l.shapeIds || l.objects?.map(obj => obj.id) || [];
+        return shapeIds.includes(shape.id);
+      });
+      
+      if (layer) {
+        if (!layerShapeMap.has(layer.id)) {
+          layerShapeMap.set(layer.id, []);
+        }
+        layerShapeMap.get(layer.id).push({ shape, index });
+      }
+    });
+    
+    // 根据shape的z-index顺序，计算图层的目标顺序
+    const layerOrder = [];
+    const processedLayers = new Set();
+    
+    sortedShapes.forEach((shape) => {
+      const layer = layers.find(l => {
+        const shapeIds = l.shapeIds || l.objects?.map(obj => obj.id) || [];
+        return shapeIds.includes(shape.id);
+      });
+      
+      if (layer && !processedLayers.has(layer.id)) {
+        layerOrder.push(layer.id);
+        processedLayers.add(layer.id);
+      }
+    });
+    
+    // 检查图层顺序是否需要更新
+    const currentOrder = layers
+      .sort((a, b) => a.orderIndex - b.orderIndex)
+      .map(l => l.id);
+    
+    if (layerOrder.length > 0 && JSON.stringify(layerOrder) !== JSON.stringify(currentOrder)) {
+      logger.debug('[画布排序] 检测到z-index变化，更新图层顺序:', layerOrder);
+      isSyncingZIndexRef.current = true;
+      
+      // 更新图层顺序
+      layerOrder.forEach((layerId, newIndex) => {
+        const currentIndex = layers.findIndex(l => l.id === layerId);
+        if (currentIndex !== -1 && currentIndex !== newIndex) {
+          handleLayerReorder(layerId, newIndex);
+        }
+      });
+      
+      // 延迟重置标志，避免立即触发同步
+      setTimeout(() => {
+        isSyncingZIndexRef.current = false;
+      }, 100);
+    }
+  }, [layers, handleLayerReorder]);
   
   // 对象删除处理 - 同步删除对应的图层
   const handleObjectDeleted = useCallback((shapeId) => {
-    console.log('Object deleted:', shapeId);
+    logger.debug('Object deleted:', shapeId);
     
     // 查找包含该shapeId的图层
     const layerToDelete = layers.find(layer => {
@@ -1392,10 +836,10 @@ const OuzhiArtPlatform = () => {
     });
     
     if (layerToDelete) {
-      console.log('Deleting layer:', layerToDelete.id, 'for shape:', shapeId);
+      logger.debug('Deleting layer:', layerToDelete.id, 'for shape:', shapeId);
       deleteLayer(layerToDelete.id);
     } else {
-      console.warn('No layer found for deleted shape:', shapeId);
+      logger.warn('No layer found for deleted shape:', shapeId);
     }
   }, [layers, deleteLayer]);
   
@@ -1411,7 +855,7 @@ const OuzhiArtPlatform = () => {
       const response = await api.post(`/comfy/apps/${appId}/run`, { uiInputs });
       const result = response.data?.data;
       
-      console.log('应用运行结果:', result);
+      logger.debug('应用运行结果:', result);
       
       // 如果有 prompt_id，需要轮询获取结果
       const promptId = result?.prompt_id || result?.promptId;
@@ -1420,23 +864,39 @@ const OuzhiArtPlatform = () => {
         // 轮询获取结果
         const pollResult = async () => {
           const maxAttempts = 30; // 最多轮询30次
-          const pollInterval = 2000; // 每2秒轮询一次
+          const basePollInterval = 2000; // 基础轮询间隔：2秒
+          const serverErrorInterval = 5000; // 服务器错误时的轮询间隔：5秒
+          const maxConsecutiveErrors = 5; // 最大连续错误次数
+          
+          let consecutiveErrors = 0; // 连续错误计数
+          let lastErrorStatus = null; // 最后一次错误的状态码
           
           for (let attempt = 0; attempt < maxAttempts; attempt++) {
             try {
+              // 根据错误情况调整轮询间隔
+              const pollInterval = (lastErrorStatus && [502, 503, 504].includes(lastErrorStatus)) 
+                ? serverErrorInterval 
+                : basePollInterval;
+              
               await new Promise(resolve => setTimeout(resolve, pollInterval));
               
-              console.log(`[轮询] 尝试 ${attempt + 1}/${maxAttempts}, promptId: ${promptId}`);
+              logger.debug(`[轮询] 尝试 ${attempt + 1}/${maxAttempts}, promptId: ${promptId}`);
               const historyResponse = await api.get(`/comfy/history/${promptId}`, {
                 // 禁用304缓存，强制获取最新数据
                 headers: {
                   'Cache-Control': 'no-cache',
                   'Pragma': 'no-cache'
-                }
+                },
+                // 增加超时时间，避免在服务器繁忙时过早超时
+                timeout: 10000
               });
               
-              console.log(`[轮询] 响应状态: ${historyResponse.status}, 完整响应:`, historyResponse);
-              console.log(`[轮询] 响应数据:`, JSON.stringify(historyResponse.data, null, 2));
+              // 成功请求，重置错误计数
+              consecutiveErrors = 0;
+              lastErrorStatus = null;
+              
+              logger.debug(`[轮询] 响应状态: ${historyResponse.status}, 完整响应:`, historyResponse);
+              logger.debug(`[轮询] 响应数据:`, JSON.stringify(historyResponse.data, null, 2));
               
               // 处理不同的响应格式
               // ComfyUI history 直接返回: { promptId: { outputs: {...} } }
@@ -1449,7 +909,7 @@ const OuzhiArtPlatform = () => {
               }
               
               if (!historyData) {
-                console.log(`[轮询] 尝试 ${attempt + 1}: 无数据，继续轮询...`);
+                logger.debug(`[轮询] 尝试 ${attempt + 1}: 无数据，继续轮询...`);
                 continue;
               }
               
@@ -1457,56 +917,138 @@ const OuzhiArtPlatform = () => {
               const promptData = historyData[promptId];
               
               if (!promptData) {
-                console.log(`[轮询] 尝试 ${attempt + 1}: promptId ${promptId} 不在历史中，继续轮询...`);
+                logger.debug(`[轮询] 尝试 ${attempt + 1}: promptId ${promptId} 不在历史中，继续轮询...`);
                 continue;
               }
               
-              console.log(`[轮询] 找到 prompt 数据:`, promptData);
+              logger.debug(`[轮询] 找到 prompt 数据:`, promptData);
+              logger.debug(`[轮询] promptData 的键:`, Object.keys(promptData));
+              logger.debug(`[轮询] promptData 完整内容:`, JSON.stringify(promptData, null, 2));
+              
+              // 检查状态，如果已完成但没有输出，可能是格式问题
+              if (promptData.status === 'success' || promptData.status === 'completed') {
+                logger.debug(`[轮询] 任务已完成，状态: ${promptData.status}`);
+              }
               
               const promptOutputs = promptData.outputs;
               
               if (!promptOutputs) {
-                console.log(`[轮询] 尝试 ${attempt + 1}: 无输出数据，继续轮询...`);
+                logger.debug(`[轮询] 尝试 ${attempt + 1}: 无输出数据，继续轮询...`);
+                // 如果任务已完成但没有输出，可能是格式问题，尝试其他方式
+                if (promptData.status === 'success' || promptData.status === 'completed') {
+                  logger.debug(`[轮询] 任务已完成但无 outputs，尝试检查其他字段...`);
+                  // 尝试从其他字段获取图片信息
+                  if (promptData.images && Array.isArray(promptData.images)) {
+                    logger.debug(`[轮询] 在 promptData.images 中找到图片:`, promptData.images);
+                    const imageOutputs = promptData.images;
+                    if (imageOutputs.length > 0) {
+                      logger.info(`[轮询] 成功！从 promptData.images 设置生成图片:`, imageOutputs);
+                      generatedLayerIdsRef.current.clear();
+                      setGeneratedImages(imageOutputs);
+                      setIsGenerating(false);
+                      setSelectedLayerIds(new Set());
+                      // 注意：清空上传组件的值应该在 GeneratorPanel 中处理
+                      return; // 成功获取结果，停止轮询
+                    }
+                  }
+                }
                 continue;
               }
               
-              console.log(`[轮询] 找到输出数据:`, promptOutputs);
+              logger.debug(`[轮询] 找到输出数据:`, promptOutputs);
+              logger.debug(`[轮询] outputs 的键:`, Object.keys(promptOutputs));
               
               // 提取所有图片
               const imageOutputs = [];
-              Object.values(promptOutputs).forEach((output, nodeId) => {
-                console.log(`[轮询] 检查节点 ${nodeId} 的输出:`, output);
-                if (output.images && Array.isArray(output.images)) {
+              
+              // 遍历所有输出节点
+              Object.entries(promptOutputs).forEach(([nodeId, output]) => {
+                logger.debug(`[轮询] 检查节点 ${nodeId} 的输出:`, output);
+                logger.debug(`[轮询] 节点 ${nodeId} 输出的键:`, Object.keys(output || {}));
+                
+                if (output && output.images && Array.isArray(output.images)) {
                   output.images.forEach(img => {
-                    console.log(`[轮询] 找到图片:`, img);
+                    logger.debug(`[轮询] 找到图片:`, img);
                     imageOutputs.push(img);
+                  });
+                } else if (output && typeof output === 'object') {
+                  // 尝试其他可能的格式
+                  // 有些情况下图片可能在 output 的直接属性中
+                  Object.entries(output).forEach(([key, value]) => {
+                    if (key === 'images' && Array.isArray(value)) {
+                      value.forEach(img => {
+                        logger.debug(`[轮询] 在 ${key} 中找到图片:`, img);
+                        imageOutputs.push(img);
+                      });
+                    }
                   });
                 }
               });
               
-              console.log(`[轮询] 提取到 ${imageOutputs.length} 张图片`);
+              logger.debug(`[轮询] 提取到 ${imageOutputs.length} 张图片`);
               
               if (imageOutputs.length > 0) {
-                console.log(`[轮询] 成功！设置生成图片:`, imageOutputs);
+                logger.info(`[轮询] 成功！设置生成图片:`, imageOutputs);
+                // 清空之前记录的图层ID
+                generatedLayerIdsRef.current.clear();
                 setGeneratedImages(imageOutputs);
                 setIsGenerating(false);
-                return;
+                // 立即清除多选状态，避免画布选择监听器触发多选
+                setSelectedLayerIds(new Set());
+                // 注意：清空上传组件的值应该在 GeneratorPanel 中处理
+                // 这里只负责设置生成结果和停止轮询
+                // 注意：不在这里清除多选状态，因为图片添加是异步的
+                // 会在所有图片添加完成后的 useEffect 中处理
+                return; // 成功获取结果，停止轮询
               }
               
-              console.log(`[轮询] 尝试 ${attempt + 1}: 暂无图片输出，继续轮询...`);
+              logger.debug(`[轮询] 尝试 ${attempt + 1}: 暂无图片输出，继续轮询...`);
             } catch (error) {
-              console.error(`[轮询] 尝试 ${attempt + 1} 失败:`, error);
-              // 如果是404，说明promptId还不存在，继续轮询
-              if (error.response?.status === 404) {
-                console.log(`[轮询] promptId ${promptId} 尚未存在，继续轮询...`);
+              const status = error.response?.status;
+              const isServerError = status && [502, 503, 504].includes(status);
+              const isNotFound = status === 404;
+              
+              consecutiveErrors++;
+              lastErrorStatus = status;
+              
+              if (isNotFound) {
+                // 404 是正常的，说明任务还没完成，继续轮询
+                logger.debug(`[轮询] promptId ${promptId} 尚未存在，继续轮询...`);
+                consecutiveErrors = 0; // 404 不算错误
+                continue;
+              } else if (isServerError) {
+                // 服务器错误（502/503/504），可能是服务器繁忙，增加延迟后继续
+                logger.warn(`[轮询] 尝试 ${attempt + 1} 遇到服务器错误 ${status}，可能是服务器繁忙，将在 ${serverErrorInterval/1000} 秒后重试...`);
+                
+                // 如果连续多次遇到服务器错误，提前终止
+                if (consecutiveErrors >= maxConsecutiveErrors) {
+                  logger.error(`[轮询] 连续 ${consecutiveErrors} 次遇到服务器错误，提前终止轮询`);
+                  setIsGenerating(false);
+                  errorHandler.showWarning(`服务器繁忙（错误 ${status}），请稍后重试或查看历史记录`);
+                  return;
+                }
+                continue;
+              } else {
+                // 其他错误
+                logger.error(`[轮询] 尝试 ${attempt + 1} 失败:`, error);
+                
+                // 如果连续多次遇到错误，提前终止
+                if (consecutiveErrors >= maxConsecutiveErrors) {
+                  logger.error(`[轮询] 连续 ${consecutiveErrors} 次遇到错误，提前终止轮询`);
+                  setIsGenerating(false);
+                  errorHandler.showWarning('获取生成结果时遇到错误，请稍后查看历史记录');
+                  return;
+                }
                 continue;
               }
             }
           }
           
           // 超时
+          logger.error(`[轮询] 超时：已尝试 ${maxAttempts} 次，仍未获取到结果`);
+          logger.error(`[轮询] promptId: ${promptId}`);
           setIsGenerating(false);
-          alert('获取生成结果超时，请稍后查看历史记录');
+          errorHandler.showWarning('获取生成结果超时，请稍后查看历史记录');
         };
         
         pollResult();
@@ -1522,16 +1064,22 @@ const OuzhiArtPlatform = () => {
         });
         
         if (imageOutputs.length > 0) {
+          // 清空之前记录的图层ID
+          generatedLayerIdsRef.current.clear();
           setGeneratedImages(imageOutputs);
+          // 立即清除多选状态，避免画布选择监听器触发多选
+          setSelectedLayerIds(new Set());
+          // 注意：清空上传组件的值应该在 GeneratorPanel 中处理（通过监听 isGenerating 状态）
         }
         setIsGenerating(false);
       } else {
         setIsGenerating(false);
-        alert('生成任务已提交，但暂无输出结果');
+        errorHandler.showWarning('生成任务已提交，但暂无输出结果');
       }
     } catch (error) {
-      console.error('生成失败:', error);
-      alert(`生成失败: ${error.response?.data?.message || error.message}`);
+      const errorMessage = errorHandler.handleError(error, '生成任务');
+      logger.error('生成失败:', error);
+      errorHandler.showError(errorMessage, error);
       setIsGenerating(false);
     }
   };
@@ -1561,7 +1109,7 @@ const OuzhiArtPlatform = () => {
       const aiMessage = { role: 'assistant', content: randomResponse };
       setMessages(prev => [...prev, aiMessage]);
     } catch (error) {
-      console.error('发送消息失败:', error);
+      logger.error('发送消息失败:', error);
     } finally {
       setIsSending(false);
     }
@@ -1580,20 +1128,19 @@ const OuzhiArtPlatform = () => {
   // 图层操作功能
   const handleLayerAdd = () => {
     const newLayer = addLayer();
-    console.log('添加新图层:', newLayer);
+    logger.debug('添加新图层:', newLayer);
     // 设置新添加的图层为激活状态
     setActiveLayerId(newLayer.id);
     
     // 调试信息
-    console.log('New layer added, setting active layer to:', newLayer.id);
+    logger.debug('New layer added, setting active layer to:', newLayer.id);
   };
-  
-  // 存储编辑器实例的引用
-  const editorRef = useRef(null);
   
   const handleEditorReady = useCallback((editor) => {
     editorRef.current = editor;
-    console.log('[主组件] Editor ready:', editor);
+    logger.debug('[主组件] Editor ready:', editor);
+    console.info('[LayerNameDebug] Editor ready, instance captured');
+    setIsEditorInitialized(true);
   }, []);
   
   const handleLayerDelete = (layerId) => {
@@ -1607,11 +1154,11 @@ const OuzhiArtPlatform = () => {
         try {
           const shape = editorRef.current.getShape(shapeId);
           if (shape) {
-            console.log('[图层删除] 删除shape:', shapeId);
+            logger.debug('[图层删除] 删除shape:', shapeId);
             editorRef.current.deleteShape(shapeId);
           }
         } catch (error) {
-          console.warn('[图层删除] 删除shape失败:', shapeId, error);
+          logger.warn('[图层删除] 删除shape失败:', shapeId, error);
         }
       });
     }
@@ -1625,7 +1172,7 @@ const OuzhiArtPlatform = () => {
   };
   
   const handleLayerToggleVisibility = (layerId) => {
-    console.log('Toggling visibility for layer:', layerId);
+    logger.debug('Toggling visibility for layer:', layerId);
     
     // 更新图层可见性状态
     toggleLayerVisibility(layerId);
@@ -1635,8 +1182,563 @@ const OuzhiArtPlatform = () => {
     toggleLayerLock(layerId);
   };
   
-  const handleLayerReorder = (layerId, newIndex) => {
-    reorderLayer(layerId, newIndex);
+  // 同步图层顺序到 tldraw 的 z-index
+  useEffect(() => {
+    if (!editorRef.current || !layers || layers.length === 0) return;
+    if (isSyncingZIndexRef.current) return; // 防止循环更新
+    
+    // 获取按 orderIndex 排序的图层列表
+    const sortedLayers = [...layers].sort((a, b) => a.orderIndex - b.orderIndex);
+    const rootLayers = sortedLayers.filter(l => !l.parentId);
+    
+    // 按顺序从下到上调整 z-index
+    // tldraw 中，先 sendToBack 的会在最下面，后 bringToFront 的会在最上面
+    rootLayers.forEach((layer, index) => {
+      const shapeIds = layer.shapeIds || layer.objects?.map(obj => obj.id) || [];
+      if (shapeIds.length > 0) {
+        try {
+          // 先发送到后面（从下往上构建）
+          editorRef.current.sendToBack(shapeIds);
+        } catch (error) {
+          logger.warn(`[图层排序] 发送到后面失败:`, shapeIds, error);
+        }
+      }
+    });
+    
+    // 然后按顺序从下到上依次带到前面
+    // 这样最下面的图层会先被带到前面，然后被后面的图层覆盖
+    rootLayers.forEach((layer, index) => {
+      const shapeIds = layer.shapeIds || layer.objects?.map(obj => obj.id) || [];
+      if (shapeIds.length > 0) {
+        try {
+          // 按顺序带到前面，后面的图层会覆盖前面的
+          editorRef.current.bringToFront(shapeIds);
+        } catch (error) {
+          logger.warn(`[图层排序] 带到前面失败:`, shapeIds, error);
+        }
+      }
+    });
+    
+    logger.debug(`[图层排序] 已同步 ${rootLayers.length} 个图层的 z-index`);
+  }, [layers.map(l => `${l.id}-${l.orderIndex}`).join(',')]); // 当图层顺序变化时触发
+  
+  // 用于防止循环更新的 ref
+  const isSelectingFromLayerRef = useRef(false);
+  
+  // 监听 activeLayerId 变化，自动选中图层对应的所有 shape
+  useEffect(() => {
+    if (!editorRef.current || !activeLayerId) return;
+    
+    const layer = layers.find(l => l.id === activeLayerId);
+    if (layer) {
+      const shapeIds = layer.shapeIds || layer.objects?.map(obj => obj.id) || [];
+      logger.debug(`[图层选择] 图层 ${activeLayerId} 包含 ${shapeIds.length} 个 shapeIds:`, shapeIds);
+      
+      if (shapeIds.length > 0) {
+        // 验证所有 shape 是否存在
+        const validShapeIds = [];
+        const invalidShapeIds = [];
+        
+        shapeIds.forEach(shapeId => {
+          try {
+            const shape = editorRef.current.getShape(shapeId);
+            if (shape) {
+              validShapeIds.push(shapeId);
+            } else {
+              invalidShapeIds.push(shapeId);
+            }
+          } catch (error) {
+            invalidShapeIds.push(shapeId);
+            logger.warn(`[图层选择] Shape 不存在或获取失败:`, shapeId, error);
+          }
+        });
+        
+        if (invalidShapeIds.length > 0) {
+          logger.warn(`[图层选择] 有 ${invalidShapeIds.length} 个无效的 shapeId:`, invalidShapeIds);
+        }
+        
+        if (validShapeIds.length > 0) {
+          // 设置标志，防止触发画布选择的监听
+          isSelectingFromLayerRef.current = true;
+          
+          // 选中所有有效的 shape
+          editorRef.current.setSelectedShapes(validShapeIds);
+          logger.debug(`[图层选择] 自动选中 ${validShapeIds.length} 个 shape:`, validShapeIds);
+          
+          // 延迟重置标志
+          setTimeout(() => {
+            isSelectingFromLayerRef.current = false;
+          }, 200);
+        } else {
+          logger.warn(`[图层选择] 图层 ${activeLayerId} 没有有效的 shape`);
+        }
+      } else {
+        logger.warn(`[图层选择] 图层 ${activeLayerId} 没有 shapeIds`);
+      }
+    } else {
+      logger.warn(`[图层选择] 图层不存在:`, activeLayerId);
+    }
+  }, [activeLayerId, layers]);
+  
+  // 监听 asset 创建，保存文件名映射
+  useEffect(() => {
+    if (!isEditorInitialized || !editorRef.current) return;
+    
+    const unsubscribe = editorRef.current.store.listen((entry) => {
+      try {
+        // 检查是否有新添加的 asset
+        if (entry.changes?.added) {
+          Object.values(entry.changes.added).forEach((record) => {
+            if (record.typeName === 'asset' && record.type === 'image') {
+              const assetId = record.id;
+              let fileName = null;
+              
+              // 尝试从 asset 中获取文件名
+              if (record.props?.name) {
+                fileName = record.props.name;
+              } else if (record.props?.src) {
+                // 从 URL 中提取文件名
+                const url = record.props.src;
+                const patterns = [
+                  /\/([^\/\?]+)\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?|$)/i,
+                  /\/([^\/\?]+)(\?|$)/,
+                  /filename=([^&]+)/,
+                ];
+                
+                for (const pattern of patterns) {
+                  const match = url.match(pattern);
+                  if (match) {
+                    fileName = decodeURIComponent(match[1]);
+                    break;
+                  }
+                }
+              }
+              
+              if (fileName) {
+                // 移除查询参数和哈希
+                fileName = fileName.split('?')[0].split('#')[0];
+                assetFileNameMapRef.current.set(assetId, fileName);
+                logger.debug(`[Asset监听] 保存文件名映射: ${assetId} -> ${fileName}`);
+                console.info('[LayerNameDebug] asset filename mapped', assetId, fileName);
+                
+                // 检查是否有对应的图层需要更新名称
+                if (fileName && !/^\d+$/.test(fileName)) {
+                  const currentLayers = layersRef.current || [];
+                  console.info('[LayerNameDebug] asset listener: checking layers', {
+                    assetId,
+                    fileName,
+                    layersCount: currentLayers.length,
+                    layers: currentLayers.map(l => ({ id: l.id, name: l.name, shapeIdsCount: l.shapeIds?.length || 0 }))
+                  });
+                  
+                  // 查找包含该 assetId 的图层
+                  const targetLayer = currentLayers.find(layer => {
+                    if (!layer.shapeIds || layer.shapeIds.length === 0) {
+                      console.info('[LayerNameDebug] asset listener: layer has no shapeIds', layer.id);
+                      return false;
+                    }
+                    // 检查该图层的 shape 是否使用这个 assetId
+                    const found = layer.shapeIds.some(shapeId => {
+                      if (!editorRef.current) return false;
+                      try {
+                        const shape = editorRef.current.getShape(shapeId);
+                        const shapeAssetId = shape?.props?.assetId;
+                        const matches = shapeAssetId === assetId;
+                        if (matches) {
+                          console.info('[LayerNameDebug] asset listener: found matching shape', {
+                            layerId: layer.id,
+                            layerName: layer.name,
+                            shapeId,
+                            shapeAssetId,
+                            assetId
+                          });
+                        }
+                        return matches;
+                      } catch (error) {
+                        console.info('[LayerNameDebug] asset listener: error getting shape', shapeId, error);
+                        return false;
+                      }
+                    });
+                    return found;
+                  });
+                  
+                  console.info('[LayerNameDebug] asset listener: targetLayer found', targetLayer ? {
+                    id: targetLayer.id,
+                    name: targetLayer.name,
+                    shapeIds: targetLayer.shapeIds
+                  } : null);
+                  
+                  if (targetLayer) {
+                    // 如果图层名称还是默认的"图层 X"格式（包括 "图层 X (N)" 格式），更新为文件名
+                    const isDefaultName = /^图层 \d+/.test(targetLayer.name);
+                    console.info('[LayerNameDebug] asset listener: checking default name', {
+                      layerName: targetLayer.name,
+                      isDefaultName,
+                      pattern: /^图层 \d+/.test(targetLayer.name)
+                    });
+                    // 强制更新：如果图层名称是默认格式，或者图层名称与文件名不同，都更新
+                    if (isDefaultName || targetLayer.name !== fileName) {
+                      logger.debug(`[Asset监听] 更新图层名称: ${targetLayer.id} (${targetLayer.name}) -> ${fileName}`);
+                      console.info('[LayerNameDebug] asset listener: update layer name', targetLayer.id, targetLayer.name, '->', fileName);
+                      renameLayer(targetLayer.id, fileName);
+                    } else {
+                      console.info('[LayerNameDebug] asset listener: layer name already matches filename, skip update', targetLayer.name);
+                    }
+                  } else {
+                    console.info('[LayerNameDebug] asset listener: no target layer found for assetId', assetId);
+                    // 如果没找到图层，可能是图层还没创建，延迟再试一次
+                    setTimeout(() => {
+                      console.info('[LayerNameDebug] asset listener: retry updateLayerNamesForAsset', assetId, fileName);
+                      updateLayerNamesForAsset(assetId, fileName);
+                    }, 500);
+                  }
+                }
+              }
+            }
+          });
+        }
+      } catch (error) {
+        logger.warn(`[Asset监听] 处理 asset 创建失败:`, error);
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [isEditorInitialized, renameLayer, getUniqueLayerName, updateLayerNamesForAsset]);
+  
+  // 监听画布内容选择变化，同步到图层选择（支持多选）
+  useEffect(() => {
+    if (!editorRef.current || !layers || layers.length === 0) return;
+    
+    let isUpdating = false; // 防止循环更新
+    
+    // 使用 editor 的 store 监听选中形状的变化
+    const unsubscribe = editorRef.current.store.listen((entry) => {
+      if (isUpdating || isSelectingFromLayerRef.current) return; // 如果正在更新或从图层选择触发，跳过
+      
+      // 如果正在生成中，跳过画布选择同步，避免干扰生成完成后的状态
+      if (isGenerating) {
+        return;
+      }
+      
+      try {
+        const selectedShapeIds = editorRef.current.getSelectedShapeIds();
+        
+        if (selectedShapeIds.length > 0) {
+          // 根据选中的 shape 找到对应的所有图层（支持多选）
+          const matchingLayers = layers.filter(layer => {
+            const layerShapeIds = layer.shapeIds || layer.objects?.map(obj => obj.id) || [];
+            return selectedShapeIds.some(shapeId => layerShapeIds.includes(shapeId));
+          });
+          
+          if (matchingLayers.length > 0) {
+            const matchingLayerIds = new Set(matchingLayers.map(l => l.id));
+            
+            // 检查是否需要更新选择
+            const needsUpdate = matchingLayers.length !== selectedLayerIds.size ||
+              !Array.from(matchingLayerIds).every(id => selectedLayerIds.has(id));
+            
+            if (needsUpdate) {
+              isUpdating = true;
+              logger.debug(`[画布选择] 同步到图层多选:`, Array.from(matchingLayerIds));
+              setSelectedLayerIds(matchingLayerIds);
+              
+              // 设置第一个匹配的图层为激活图层
+              if (matchingLayers[0].id !== activeLayerId) {
+                setActiveLayerId(matchingLayers[0].id);
+              }
+              
+              setTimeout(() => { isUpdating = false; }, 100);
+            }
+          }
+        } else {
+          // 如果画布选择被清除，也清除图层多选
+          if (selectedLayerIds.size > 0) {
+            setSelectedLayerIds(new Set());
+          }
+        }
+      } catch (error) {
+        logger.warn(`[画布选择] 同步失败:`, error);
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [layers, activeLayerId, selectedLayerIds, isGenerating]);
+  
+  // 监听生成图片添加完成，清除多选状态或自动合并
+  useEffect(() => {
+    if (isGenerating || generatedLayerIdsRef.current.size === 0) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      const generatedLayerIds = Array.from(generatedLayerIdsRef.current);
+      generatedLayerIdsRef.current.clear();
+
+      const currentLayers = layersRef.current || [];
+      const editor = editorRef.current;
+
+      if (!editor || currentLayers.length === 0 || generatedLayerIds.length === 0) {
+        return;
+      }
+
+      const existingLayers = generatedLayerIds
+        .map(id => currentLayers.find(layer => layer.id === id))
+        .filter(Boolean);
+
+      if (existingLayers.length === 0) {
+        return;
+      }
+
+      const parseFileNameFromUrl = (url) => {
+        if (!url || typeof url !== 'string') return null;
+        try {
+          const decoded = decodeURIComponent(url);
+          const fileMatch = decoded.match(/([^/?#]+\.(png|jpe?g|webp|gif|svg|bmp))(?:[?#].*)?$/i);
+          if (fileMatch) {
+            return fileMatch[1];
+          }
+          const filenameParam = decoded.match(/filename=([^&]+)/i);
+          if (filenameParam) {
+            return filenameParam[1];
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      };
+
+      const assetIdsToUpdate = new Set();
+      const candidateNames = [];
+
+      existingLayers.forEach(layer => {
+        const shapeIds = layer.shapeIds || layer.objects?.map(obj => obj.id) || [];
+        shapeIds.forEach(shapeId => {
+          try {
+            const shape = editor.getShape(shapeId);
+            const assetId = shape?.props?.assetId;
+            if (assetId) {
+              assetIdsToUpdate.add(assetId);
+              const mappedName = assetFileNameMapRef.current.get(assetId);
+              if (mappedName) {
+                candidateNames.push(mappedName);
+              }
+            }
+
+            // 从对象数据中提取候选名称
+            const objectData = layer.objects?.find(obj => obj.id === shapeId);
+            const originalShape = objectData?.data;
+            const imageDataFile = originalShape?.data?.imageData?.filename;
+            if (imageDataFile) {
+              candidateNames.push(imageDataFile);
+            }
+
+            const imageUrl = originalShape?.data?.imageUrl || shape?.meta?.src || shape?.props?.src;
+            const parsed = parseFileNameFromUrl(imageUrl);
+            if (parsed) {
+              candidateNames.push(parsed);
+            }
+          } catch (error) {
+            logger.warn('[生成完成] 提取 shape 信息失败:', shapeId, error);
+          }
+        });
+      });
+
+      // 选择最终名称
+      let finalBaseName = candidateNames.find(name => !!name);
+      if (!finalBaseName) {
+        const firstLayerName = existingLayers[0].name || '';
+        if (firstLayerName && !/^图层\s*\d+/.test(firstLayerName)) {
+          finalBaseName = firstLayerName;
+        }
+      }
+      if (!finalBaseName) {
+        finalBaseName = '生成结果';
+      }
+
+      let targetLayerId = existingLayers[0].id;
+      let mergedLayerId = targetLayerId;
+
+      if (existingLayers.length > 1) {
+        const sourceLayerIds = existingLayers.slice(1).map(layer => layer.id);
+        logger.info('[生成完成] 自动合并图层:', { targetLayerId, sourceLayerIds });
+        mergedLayerId = mergeMultipleLayers(targetLayerId, sourceLayerIds) || targetLayerId;
+      }
+
+      // 更新名称
+      const uniqueName = getUniqueLayerName(finalBaseName, mergedLayerId);
+      const updatedLayers = layersRef.current || [];
+      const mergedLayer = updatedLayers.find(layer => layer.id === mergedLayerId);
+      if (uniqueName && mergedLayer?.name !== uniqueName) {
+        logger.info('[生成完成] 重命名合并后的图层:', mergedLayerId, '->', uniqueName);
+        renameLayer(mergedLayerId, uniqueName);
+      }
+
+      // 更新 asset -> layer 映射
+      assetIdsToUpdate.forEach(assetId => {
+        if (assetId) {
+          assetLayerMapRef.current.set(assetId, [mergedLayerId]);
+        }
+      });
+
+      // 设置选中与激活
+      setSelectedLayerIds(new Set([mergedLayerId]));
+      setActiveLayerId(mergedLayerId);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [isGenerating, mergeMultipleLayers, renameLayer, getUniqueLayerName, setActiveLayerId]);
+  
+  
+  // 处理图层选择，同步到画布内容选择（支持多选）
+  const handleLayerSelectWithSync = (layerId, event) => {
+    const isMultiSelect = event?.ctrlKey || event?.metaKey || event?.shiftKey;
+    
+    if (isMultiSelect) {
+      // 多选模式
+      setSelectedLayerIds(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(layerId)) {
+          newSet.delete(layerId);
+          // 如果取消选择的是当前激活图层，切换到其他选中的图层
+          if (activeLayerId === layerId && newSet.size > 0) {
+            setActiveLayerId(Array.from(newSet)[0]);
+          } else if (newSet.size === 0) {
+            setActiveLayerId(null);
+          }
+        } else {
+          newSet.add(layerId);
+          setActiveLayerId(layerId);
+        }
+        return newSet;
+      });
+    } else {
+      // 单选模式
+      setSelectedLayerIds(new Set([layerId]));
+      setActiveLayerId(layerId);
+    }
+    
+    // 注意：实际的 shape 选择会由上面的 useEffect 自动处理
+    // 这里不需要手动设置，避免与 useEffect 冲突
+  };
+  
+  // 组合选中的图层
+  const handleGroupSelectedLayers = () => {
+    if (selectedLayerIds.size < 2) {
+      errorHandler.showWarning('请至少选择2个图层进行组合');
+      return;
+    }
+    
+    const layerIdsArray = Array.from(selectedLayerIds);
+    const groupName = `图层组 ${layerGroups.length + 1}`;
+    const newGroup = createLayerGroup(groupName, layerIdsArray);
+    
+    // 清除多选状态
+    setSelectedLayerIds(new Set());
+    setActiveLayerId(layerIdsArray[0]);
+    
+    logger.debug(`[图层组合] 创建组合:`, newGroup.id, layerIdsArray);
+  };
+  
+  // 合并选中的图层
+  const handleMergeSelectedLayers = () => {
+    if (selectedLayerIds.size < 2) {
+      errorHandler.showWarning('请至少选择2个图层进行合并');
+      return;
+    }
+    
+    const layerIdsArray = Array.from(selectedLayerIds);
+    const targetLayerId = layerIdsArray[0];
+    const sourceLayerIds = layerIdsArray.slice(1);
+    
+    logger.debug(`[图层合并] 开始合并:`, { target: targetLayerId, sources: sourceLayerIds });
+    
+    // 在合并前收集所有要合并的 shapeIds
+    const allShapeIdsToMerge = [];
+    layerIdsArray.forEach(layerId => {
+      const layer = layers.find(l => l.id === layerId);
+      if (layer) {
+        const shapeIds = layer.shapeIds || layer.objects?.map(obj => obj.id) || [];
+        allShapeIdsToMerge.push(...shapeIds);
+      }
+    });
+    
+    logger.debug(`[图层合并] 收集到的 shapeIds:`, allShapeIdsToMerge);
+    
+    // 执行合并
+    const mergedLayerId = mergeMultipleLayers(targetLayerId, sourceLayerIds);
+    
+    if (mergedLayerId) {
+      // 清除多选状态
+      setSelectedLayerIds(new Set());
+      
+      // 设置合并后的图层为激活图层
+      // useEffect 会自动选中该图层对应的所有 shape（包括合并进来的）
+      setActiveLayerId(mergedLayerId);
+      
+      logger.debug(`[图层合并] 合并成功:`, mergedLayerId, `预期包含 ${allShapeIdsToMerge.length} 个 shape`);
+      
+      // 验证合并后的图层数据（延迟执行，等待状态更新）
+      setTimeout(() => {
+        // 使用 ref 获取最新的 layers 状态，避免闭包问题
+        const currentLayers = layersRef.current;
+        if (!currentLayers) {
+          logger.warn(`[图层合并] 警告：无法获取最新的图层状态`);
+          return;
+        }
+        
+        const mergedLayer = currentLayers.find(l => l.id === mergedLayerId);
+        if (mergedLayer) {
+          const actualShapeIds = mergedLayer.shapeIds || [];
+          logger.debug(`[图层合并] 合并后的图层数据:`, {
+            id: mergedLayer.id,
+            name: mergedLayer.name,
+            shapeIdsCount: actualShapeIds.length,
+            expectedCount: allShapeIdsToMerge.length,
+            objectsCount: mergedLayer.objects?.length || 0,
+            shapeIds: actualShapeIds,
+            expectedShapeIds: allShapeIdsToMerge
+          });
+          
+          // 检查是否有遗漏的 shapeIds
+          // 同时验证这些 shape 是否在画布上还存在
+          const missingShapeIds = [];
+          allShapeIdsToMerge.forEach(shapeId => {
+            if (!actualShapeIds.includes(shapeId)) {
+              // 检查 shape 是否在画布上还存在
+              if (editorRef.current) {
+                const shape = editorRef.current.getShape(shapeId);
+                if (shape) {
+                  // shape 存在但未合并，这是问题
+                  missingShapeIds.push(shapeId);
+                  logger.warn(`[图层合并] Shape ${shapeId} 存在于画布但未合并到图层`);
+                } else {
+                  // shape 不存在，可能是被删除了，这是正常的
+                  logger.debug(`[图层合并] Shape ${shapeId} 不存在于画布，可能已被删除`);
+                }
+              } else {
+                missingShapeIds.push(shapeId);
+              }
+            }
+          });
+          
+          if (missingShapeIds.length > 0) {
+            logger.warn(`[图层合并] 警告：有 ${missingShapeIds.length} 个 shapeId 未被合并:`, missingShapeIds);
+          } else {
+            logger.info(`[图层合并] 验证通过：所有 shapeIds 都已正确合并`);
+          }
+        } else {
+          logger.error(`[图层合并] 错误：合并后的图层不存在:`, mergedLayerId);
+        }
+        }, DELAYS.STATE_UPDATE); // 增加延迟，确保状态更新完成
+      } else {
+        errorHandler.showError('合并失败，请检查图层是否有效');
+        logger.error(`[图层合并] 合并失败`);
+    }
+  };
+  
+  // 取消多选
+  const handleClearSelection = () => {
+    setSelectedLayerIds(new Set());
   };
   
   const handleLayerSetOpacity = (layerId, opacity) => {
@@ -1661,32 +1763,20 @@ const OuzhiArtPlatform = () => {
   
   // 系统功能
   const handleOpenMember = () => {
-    console.log('打开会员页面');
+    logger.debug('打开会员页面');
   };
   
   const handleNotificationClick = () => {
-    console.log('查看通知');
+    logger.debug('查看通知');
   };
   
   const handleProfileClick = () => {
-    console.log('打开个人中心');
+    logger.debug('打开个人中心');
   };
   
   return (
-    <div className="w-full h-screen bg-gray-100 flex flex-col">
-      {/* 顶部导航栏 */}
-      <TopNavbar
-        projectName={projectName}
-        setProjectName={setProjectName}
-        isEditingName={isEditingName}
-        setIsEditingName={setIsEditingName}
-        points={points}
-        memberStatus={memberStatus}
-        onOpenMember={handleOpenMember}
-        onNotificationClick={handleNotificationClick}
-        onProfileClick={handleProfileClick}
-      />
-      
+    <div className="w-full h-full bg-gray-100 flex flex-col">
+      {/* 顶部导航栏已移至App.jsx，这里不再显示 */}
       <div className="flex-1 flex overflow-hidden">
         {/* 生成器面板 */}
         <GeneratorPanel
@@ -1694,12 +1784,14 @@ const OuzhiArtPlatform = () => {
           isGenerating={isGenerating}
           isCollapsed={isLeftPanelCollapsed}
           onToggleCollapse={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
+          layers={layers}
+          editorRef={editorRef}
         />
         
         {/* 画布区域 */}
         <div className="flex-1 flex flex-col">
           {/* tldraw画布 */}
-          <div className="flex-1 relative bg-gray-200 overflow-hidden">
+          <div className="flex-1 relative bg-gray-200 overflow-hidden" style={{ zIndex: 1 }}>
             <Tldraw>
               <EditableCanvas 
                 activeTool={activeTool}
@@ -1717,25 +1809,32 @@ const OuzhiArtPlatform = () => {
         </div>
         
         {/* 图层管理面板 */}
-        <LayerPanel
-          layers={layers}
-          activeLayerId={activeLayerId}
-          layerGroups={layerGroups}
-          onLayerSelect={setActiveLayerId}
-          onLayerAdd={handleLayerAdd}
-          onLayerDelete={handleLayerDelete}
-          onLayerToggleVisibility={toggleLayerVisibility}
-          onLayerToggleLock={handleLayerToggleLock}
-          onLayerRename={handleLayerRename}
-          onLayerReorder={handleLayerReorder}
-          onLayerSetOpacity={handleLayerSetOpacity}
-          onLayerSetBlendMode={handleLayerSetBlendMode}
-          onLayerGroupCreate={handleLayerGroupCreate}
-          onLayerGroupDelete={handleLayerGroupDelete}
-          onLayerGroupRename={handleLayerGroupRename}
-          isCollapsed={isLayerPanelCollapsed}
-          onToggleCollapse={() => setIsLayerPanelCollapsed(!isLayerPanelCollapsed)}
-        />
+        <div className="relative z-[100]">
+          <LayerPanel
+            layers={layers}
+            activeLayerId={activeLayerId}
+            selectedLayerIds={selectedLayerIds}
+            layerGroups={layerGroups}
+            onLayerSelect={handleLayerSelectWithSync}
+            onLayerAdd={handleLayerAdd}
+            onLayerDelete={handleLayerDelete}
+            onLayerToggleVisibility={toggleLayerVisibility}
+            onLayerToggleLock={handleLayerToggleLock}
+            onLayerRename={handleLayerRename}
+            onLayerReorder={handleLayerReorder}
+            onLayerSetOpacity={handleLayerSetOpacity}
+            onLayerSetBlendMode={handleLayerSetBlendMode}
+            onLayerGroupCreate={handleLayerGroupCreate}
+            onLayerGroupDelete={handleLayerGroupDelete}
+            onLayerGroupRename={handleLayerGroupRename}
+            onGroupSelectedLayers={handleGroupSelectedLayers}
+            onMergeSelectedLayers={handleMergeSelectedLayers}
+            onClearSelection={handleClearSelection}
+            isCollapsed={isLayerPanelCollapsed}
+            onToggleCollapse={() => setIsLayerPanelCollapsed(!isLayerPanelCollapsed)}
+            editorRef={editorRef}
+          />
+        </div>
         
         {/* AI设计师对话面板 */}
         <AIDesignerPanel

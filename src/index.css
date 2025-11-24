@@ -61,3 +61,36 @@
     @apply px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
   }
 }
+
+/* 修复tldraw UI遮挡图层面板的问题 */
+.tl-container {
+  z-index: 1 !important;
+}
+
+.tl-ui {
+  z-index: 10 !important;
+}
+
+/* tldraw的UI层通常在100-200之间，确保图层面板在更高层级 */
+/* 确保图层面板在tldraw UI之上 */
+[class*="LayerPanel"],
+div[class*="LayerPanel"],
+.layer-panel-container {
+  z-index: 10000 !important;
+  position: relative !important;
+  height: 100% !important;
+}
+
+/* 确保图层面板的标题栏可见且固定在顶部 */
+[class*="LayerPanel"] > div:first-child,
+div[class*="LayerPanel"] > div:first-child,
+.layer-panel-header {
+  z-index: 10001 !important;
+  position: sticky !important;
+  top: 0 !important;
+  background: white !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+}

@@ -8,7 +8,8 @@ import {
   Plus,
   Square,
   Circle,
-  Target
+  Target,
+  RotateCcw
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -19,11 +20,19 @@ const MaskManager = ({
   onMaskApply,
   onMaskRemove,
   onMaskToggle,
+  onMaskInvert,
+  selectionState,
+  onSelectionToolChange,
+  onSelectionCrop,
+  onSelectionInverseCrop,
+  onSelectionCancel,
   className 
 }) => {
   const [maskMode, setMaskMode] = useState('create'); // 'create', 'apply', 'edit'
   const [selectedMaskShape, setSelectedMaskShape] = useState('rectangle'); // 'rectangle', 'circle', 'freehand'
   const [activeMasks, setActiveMasks] = useState(new Map()); // layerId -> maskInfo
+  const [invertedMasks, setInvertedMasks] = useState(new Set()); // 反向蒙版的图层ID集合
+  const [expandPixels, setExpandPixels] = useState(0); // 内缩/外扩像素数（负值为内缩，正值为外扩）
 
   const activeLayer = layers.find(layer => layer.id === activeLayerId);
 
@@ -33,8 +42,15 @@ const MaskManager = ({
     
     setSelectedMaskShape(shape);
     setMaskMode('create');
-    onMaskCreate?.(activeLayerId, shape);
-  }, [activeLayerId, onMaskCreate]);
+    onMaskCreate?.(activeLayerId, shape, expandPixels);
+  }, [activeLayerId, onMaskCreate, expandPixels]);
+
+  // 当expandPixels变化时，如果已经选择了形状，更新蒙版创建参数
+  useEffect(() => {
+    if (maskMode === 'create' && selectedMaskShape && activeLayerId) {
+      onMaskCreate?.(activeLayerId, selectedMaskShape, expandPixels);
+    }
+  }, [expandPixels, maskMode, selectedMaskShape, activeLayerId, onMaskCreate]);
 
   // 应用蒙版到图层
   const handleApplyMask = useCallback((targetLayerId, maskData) => {
@@ -61,6 +77,21 @@ const MaskManager = ({
       onMaskToggle?.(layerId, newMaskInfo.visible);
     }
   }, [activeMasks, onMaskToggle]);
+
+  // 切换蒙版反向（反向裁剪）
+  const handleToggleInvert = useCallback((layerId) => {
+    const isInverted = invertedMasks.has(layerId);
+    setInvertedMasks(prev => {
+      const newSet = new Set(prev);
+      if (isInverted) {
+        newSet.delete(layerId);
+      } else {
+        newSet.add(layerId);
+      }
+      return newSet;
+    });
+    onMaskInvert?.(layerId, !isInverted);
+  }, [invertedMasks, onMaskInvert]);
 
   return (
     <div className={clsx('panel p-3', className)}>
@@ -113,6 +144,29 @@ const MaskManager = ({
           </div>
         </div>
 
+        {/* 内缩/外扩设置 */}
+        {maskMode === 'create' && (
+          <div className="space-y-2">
+            <div className="text-xs text-gray-500">内缩/外扩裁剪</div>
+            <div className="flex items-center space-x-2">
+              <input
+                type="range"
+                min="-50"
+                max="50"
+                value={expandPixels}
+                onChange={(e) => setExpandPixels(parseInt(e.target.value))}
+                className="flex-1"
+              />
+              <span className={`text-xs w-16 text-center ${expandPixels > 0 ? 'text-blue-600' : expandPixels < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                {expandPixels > 0 ? `+${expandPixels}` : expandPixels}px
+              </span>
+            </div>
+            <div className="text-xs text-gray-400">
+              {expandPixels > 0 ? '外扩区域将透明填充' : expandPixels < 0 ? '内缩将缩小裁剪区域' : '默认裁剪'}
+            </div>
+          </div>
+        )}
+
         {/* 创建蒙版工具 */}
         {maskMode === 'create' && (
           <div className="space-y-2">
@@ -150,13 +204,62 @@ const MaskManager = ({
                     ? 'border-primary-300 bg-primary-50'
                     : 'border-gray-200'
                 )}
-                title="自由绘制蒙版"
+                title="涂抹裁剪（自由绘制）"
               >
                 <Target size={16} className="mx-auto" />
               </button>
             </div>
           </div>
         )}
+
+        <div className="space-y-2">
+          <div className="text-xs text-gray-500">自定义选区</div>
+          <div className="grid grid-cols-2 gap-1">
+            <button
+              onClick={() => onSelectionToolChange?.('brush')}
+              className="p-2 rounded border border-dashed text-xs hover:bg-gray-50 transition"
+            >
+              涂抹选区
+            </button>
+            <button
+              onClick={() => onSelectionToolChange?.('lasso')}
+              className="p-2 rounded border border-dashed text-xs hover:bg-gray-50 transition"
+            >
+              套索选区
+            </button>
+          </div>
+          {selectionState && (
+            <div className="space-y-1 text-xs">
+              <div className="flex items-center justify-between text-blue-600">
+                <span>
+                  {selectionState.status === 'ready' ? '选区已就绪' : '正在绘制选区...'}
+                </span>
+                <button
+                  onClick={onSelectionCancel}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  取消
+                </button>
+              </div>
+              {selectionState.status === 'ready' && (
+                <div className="flex gap-1">
+                  <button
+                    onClick={onSelectionCrop}
+                    className="flex-1 px-2 py-1 rounded bg-blue-500 text-white"
+                  >
+                    裁剪
+                  </button>
+                  <button
+                    onClick={onSelectionInverseCrop}
+                    className="flex-1 px-2 py-1 rounded bg-purple-500 text-white"
+                  >
+                    反向裁剪
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* 当前图层信息 */}
         {activeLayer && (
@@ -203,6 +306,16 @@ const MaskManager = ({
                       title={maskInfo.visible ? '隐藏蒙版' : '显示蒙版'}
                     >
                       {maskInfo.visible ? <Eye size={10} /> : <EyeOff size={10} />}
+                    </button>
+                    <button
+                      onClick={() => handleToggleInvert(layerId)}
+                      className={clsx(
+                        "p-1 rounded text-gray-400 hover:text-blue-600",
+                        invertedMasks.has(layerId) && "text-blue-600"
+                      )}
+                      title={invertedMasks.has(layerId) ? '取消反向裁剪' : '反向裁剪'}
+                    >
+                      <RotateCcw size={10} />
                     </button>
                     <button
                       onClick={() => handleRemoveMask(layerId)}
