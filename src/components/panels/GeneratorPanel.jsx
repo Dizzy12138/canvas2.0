@@ -39,6 +39,8 @@ const GeneratorPanel = ({
   const [inputValues, setInputValues] = useState({});
   const [wasGenerating, setWasGenerating] = useState(false);
   
+  // 注：已移除前端可配置的轮询超时，使用平台/后端默认值以简化体验
+  
   // 监听生成状态，生成完成后清空上传组件
   useEffect(() => {
     // 如果从生成中变为非生成中，说明生成完成
@@ -161,8 +163,8 @@ const GeneratorPanel = ({
         } else {
           logger.debug(`[UploadComponent] File name doesn't match expected pattern: ${value.name}`);
         }
-      } else if (!value && selectedLayerId) {
-        // 如果 value 被清空，也清空 selectedLayerId
+      } else if ((value === null || value === '') && selectedLayerId) {
+        // 只有在值明确被清空时才清除选中的图层，避免异步加载期间闪动
         logger.debug(`[UploadComponent] Value cleared, clearing selectedLayerId`);
         setSelectedLayerId(null);
       }
@@ -1005,10 +1007,9 @@ const GeneratorPanel = ({
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          className={clsx(
+            className={clsx(
             'border-2 border-dashed rounded-lg p-4 transition-colors text-center',
-            isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-gray-50',
-            'hover:border-gray-400 cursor-pointer'
+            isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-gray-50'
           )}
         >
           <input
@@ -1133,6 +1134,43 @@ const GeneratorPanel = ({
       );
     }
     
+    // 滑块输入
+    if (type === 'slider') {
+      const min = comp.properties?.min ?? 0;
+      const max = comp.properties?.max ?? 100;
+      const step = comp.properties?.step ?? 1;
+      const currentValue = Number(value ?? min);
+      
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center space-x-3">
+            <input
+              type="range"
+              min={min}
+              max={max}
+              step={step}
+              value={currentValue}
+              onChange={(e) => setVal(Number(e.target.value))}
+              className="flex-1"
+            />
+            <input
+              type="number"
+              min={min}
+              max={max}
+              step={step}
+              value={currentValue}
+              onChange={(e) => setVal(Number(e.target.value))}
+              className="w-20 p-1 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            />
+          </div>
+          <div className="flex justify-between text-xs text-gray-500">
+            <span>{min}</span>
+            <span>{max}</span>
+          </div>
+        </div>
+      );
+    }
+    
     // 文件上传（支持拖拽图层）
     if (type === 'upload_image' || type === 'upload_single_image' || type === 'upload_multiple_images' || type === 'upload_multi_media') {
       const multiple = type === 'upload_multiple_images' || (comp.properties?.multiple === true);
@@ -1147,7 +1185,7 @@ const GeneratorPanel = ({
     }
     
     // 选择框
-    if (type === 'select') {
+    if (type === 'select' || type === 'dropdown_text' || type === 'dropdown_number') {
       const options = comp.properties?.options || [];
       return (
         <select
@@ -1267,7 +1305,7 @@ const GeneratorPanel = ({
       return;
     }
     
-    // 调用生成函数
+    // 调用生成函数（不再传入前端可配置的超时时间，由平台/后端决定）
     if (onGenerate) {
       onGenerate(selectedAppId, uiInputs);
     }
@@ -1368,6 +1406,8 @@ const GeneratorPanel = ({
             请先选择一个工作流应用
           </div>
         )}
+        
+        {/* 轮询超时配置已移除（用户体验原因） */}
         
         {/* 生成按钮 */}
         {selectedAppId && components.length > 0 && (

@@ -201,11 +201,23 @@ const AIPanel = ({
                   }))}
                   className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500"
                 >
-                  {param.options.map(option => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
+                  {param.options.map((option, index) => {
+                    const isObject = typeof option === 'object' && option !== null;
+                    const rawValue = isObject
+                      ? option.value ?? option.id ?? option.key ?? `option-${index}`
+                      : option;
+                    const optionLabel = isObject
+                      ? option.label ?? option.name ?? String(rawValue)
+                      : option;
+                    const optionKey = isObject
+                      ? option.id ?? option.key ?? `${rawValue}-${index}`
+                      : `${rawValue}-${index}`;
+                    return (
+                      <option key={optionKey} value={rawValue}>
+                        {optionLabel}
+                      </option>
+                    );
+                  })}
                 </select>
               ) : (
                 <input
@@ -238,11 +250,14 @@ const AIPanel = ({
           className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
         >
           <option value="auto">自动/默认</option>
-          {services.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}{s.isDefault ? '（默认）' : ''} - {s.healthStatus}
-            </option>
-          ))}
+          {services.map((s, index) => {
+            const optionValue = s.id ?? s._id ?? `service-${index}`;
+            return (
+              <option key={optionValue} value={optionValue}>
+                {s.name}{s.isDefault ? '（默认）' : ''} - {s.healthStatus}
+              </option>
+            );
+          })}
         </select>
       </div>
 
@@ -255,11 +270,14 @@ const AIPanel = ({
           className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
         >
           <option value="default">默认工作流</option>
-          {workflows.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.name} ({w.type === 'builtin' ? '内置' : '自定义'})
-            </option>
-          ))}
+          {workflows.map((w, index) => {
+            const optionValue = w.id ?? w._id ?? `workflow-${index}`;
+            return (
+              <option key={optionValue} value={optionValue}>
+                {w.name} ({w.type === 'builtin' ? '内置' : '自定义'})
+              </option>
+            );
+          })}
         </select>
       </div>
 

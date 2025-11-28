@@ -314,8 +314,8 @@ const LayerPanel = ({
   return (
     <div 
       className={clsx(
-        "h-full border-l bg-white flex flex-col transition-all duration-300 layer-panel-container",
-        isCollapsed ? "w-12" : "w-64"
+        "h-full bg-white flex flex-col transition-all duration-300 layer-panel-container",
+        isCollapsed ? "w-12" : "w-full"
       )}
       style={{ position: 'relative', zIndex: 10000, height: '100%' }}
     >

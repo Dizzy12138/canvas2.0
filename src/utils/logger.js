@@ -11,10 +11,40 @@ const LOG_LEVELS = {
   NONE: 4,
 };
 
-// 根据环境变量设置日志级别
+const normalizeLevel = (level) => LOG_LEVELS[level?.toUpperCase()] ?? null;
+
+const getRuntimeLogLevel = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const urlLevel = params.get('logLevel');
+    if (urlLevel) {
+      const normalized = urlLevel.toUpperCase();
+      window.localStorage?.setItem('app.logLevel', normalized);
+      return normalizeLevel(normalized);
+    }
+    const stored = window.localStorage?.getItem('app.logLevel');
+    if (stored) {
+      return normalizeLevel(stored);
+    }
+  } catch (error) {
+    // 访问 localStorage 失败时忽略，回退到默认逻辑
+  }
+  return null;
+};
+
+// 根据环境变量和运行时配置设置日志级别
 const getLogLevel = () => {
-  const envLevel = import.meta.env.VITE_LOG_LEVEL || 'INFO';
-  return LOG_LEVELS[envLevel.toUpperCase()] ?? LOG_LEVELS.INFO;
+  const runtimeLevel = getRuntimeLogLevel();
+  if (runtimeLevel !== null) {
+    return runtimeLevel;
+  }
+  const envLevel = normalizeLevel(import.meta.env.VITE_LOG_LEVEL);
+  if (envLevel !== null) {
+    return envLevel;
+  }
+  const fallback = import.meta.env.PROD ? LOG_LEVELS.WARN : LOG_LEVELS.INFO;
+  return fallback;
 };
 
 const currentLogLevel = getLogLevel();

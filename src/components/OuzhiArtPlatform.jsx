@@ -1,11 +1,10 @@
 // React核心
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 
 // 第三方库
 import { 
   Rocket, 
   Plus, 
-  Image, 
   Type, 
   Square, 
   Circle, 
@@ -20,18 +19,11 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
-  MessageSquare,
-  User,
   Bell,
   CreditCard,
   FileText,
   Settings,
   Star,
-  RefreshCw,
-  Send,
-  Heart,
-  ThumbsUp,
-  ThumbsDown,
   MousePointer2,
   Hand,
   Eraser,
@@ -48,7 +40,10 @@ import {
   X,
   Layers,
   Scissors,
-  Package
+  Package,
+  Brush,
+  Download,
+  Expand
 } from 'lucide-react';
 import { Tldraw, useEditor, useValue } from 'tldraw';
 import 'tldraw/tldraw.css';
@@ -68,177 +63,979 @@ import CanvasToolbar from './toolbar/CanvasToolbar.jsx';
 import EditableCanvas from './canvas/EditableCanvas.jsx';
 import GeneratorPanel from './panels/GeneratorPanel.jsx';
 import LayerPanel from './LayerPanel.jsx';
+import PropertyPanel from './PropertyPanel.jsx';
+import EnhancedLayerPanel from './EnhancedLayerPanel.jsx';
+import AlignAssistSystem from './AlignAssistSystem.jsx';
+import LayerDiffViewer from './LayerDiffViewer.jsx';
+import AIPanel from './AIPanel.jsx';
+import VisualWorkflowEditor from './VisualWorkflowEditor.jsx';
+import ServiceManager from './ServiceManager.jsx';
 
+const arraysEqual = (a = [], b = []) =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
 
-// AI设计师对话面板组件
-const AIDesignerPanel = ({ 
-  messages, 
-  inputMessage, 
-  setInputMessage, 
-  onSendMessage,
-  quickQuestions,
-  onRefreshQuestions,
-  isSending,
-  isCollapsed,
-  onToggleCollapse
-}) => {
-  const messagesEndRef = useRef(null);
-  
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+const loadImageElement = (src) =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+
+const clamp01 = (value) => Math.max(0, Math.min(1, value));
+
+const normalizePointWithinBounds = (point, bounds) => {
+  if (!bounds) return { x: 0, y: 0 };
+  const width = bounds.width ?? bounds.w ?? 0;
+  const height = bounds.height ?? bounds.h ?? 0;
+  return {
+    x: width ? clamp01((point.x - bounds.minX) / width) : 0,
+    y: height ? clamp01((point.y - bounds.minY) / height) : 0
   };
+};
+
+const isPointInsideBounds = (point, bounds) =>
+  !!bounds &&
+  point.x >= bounds.minX &&
+  point.x <= bounds.maxX &&
+  point.y >= bounds.minY &&
+  point.y <= bounds.maxY;
+
+const MIN_RESIZE_SIZE = 20;
+
+const clampResizeDeltaValue = (value = 0, size = 0) => {
+  const numericValue = Number(value) || 0;
+  if (numericValue >= 0) {
+    return numericValue;
+  }
+  if (!size || size <= MIN_RESIZE_SIZE) {
+    return 0;
+  }
+  const minDelta = MIN_RESIZE_SIZE - size;
+  return Math.max(numericValue, minDelta);
+};
+
+const createAssetId = () => {
+  const uuid =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : Math.random().toString(36).slice(2, 10);
+  return `asset:${uuid}`;
+};
+
+const ImageExtendOverlay = ({
+  containerRef,
+  editorRef,
+  selectionBounds,
+  onCommit,
+  highlight
+}) => {
+  const [dragState, setDragState] = useState(null);
+  const dragStateRef = useRef(null);
+  const dragRafRef = useRef(null);
+  const lastPointerRef = useRef(null);
+
+  useEffect(() => {
+    dragStateRef.current = dragState;
+  }, [dragState]);
   
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    setDragState(null);
+  }, [selectionBounds?.shapeId]);
+
+  useEffect(() => {
+    const MIN_EXTEND_DELTA = 1;
+
+    const handleMove = (event) => {
+      const currentDrag = dragStateRef.current;
+      if (!currentDrag) return;
+      event.preventDefault();
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+      
+      if (dragRafRef.current) return;
+      dragRafRef.current = requestAnimationFrame(() => {
+        dragRafRef.current = null;
+        const editor = editorRef.current;
+        if (!editor || !lastPointerRef.current) return;
+        const dragSnapshot = dragStateRef.current;
+        if (!dragSnapshot) return;
+
+        const currentPage = editor.screenToPage({
+          x: lastPointerRef.current.x,
+          y: lastPointerRef.current.y
+        });
+        const deltaX = currentPage.x - dragSnapshot.startPage.x;
+        const deltaY = currentPage.y - dragSnapshot.startPage.y;
+        const baseExtend = dragSnapshot.extend || { top: 0, right: 0, bottom: 0, left: 0 };
+        const updatedExtend = {
+          ...baseExtend
+        };
+        let changed = false;
+
+        switch (dragSnapshot.direction) {
+          case 'left': {
+            const extent = -deltaX;
+            const clamped = clampResizeDeltaValue(extent, dragSnapshot.initialWidth);
+            if (Math.abs(clamped - (baseExtend.left ?? 0)) > MIN_EXTEND_DELTA) {
+              updatedExtend.left = clamped;
+              changed = true;
+            }
+            break;
+          }
+          case 'right': {
+            const extent = deltaX;
+            const clamped = clampResizeDeltaValue(extent, dragSnapshot.initialWidth);
+            if (Math.abs(clamped - (baseExtend.right ?? 0)) > MIN_EXTEND_DELTA) {
+              updatedExtend.right = clamped;
+              changed = true;
+            }
+            break;
+          }
+          case 'top': {
+            const extent = -deltaY;
+            const clamped = clampResizeDeltaValue(extent, dragSnapshot.initialHeight);
+            if (Math.abs(clamped - (baseExtend.top ?? 0)) > MIN_EXTEND_DELTA) {
+              updatedExtend.top = clamped;
+              changed = true;
+            }
+            break;
+          }
+          case 'bottom': {
+            const extent = deltaY;
+            const clamped = clampResizeDeltaValue(extent, dragSnapshot.initialHeight);
+            if (Math.abs(clamped - (baseExtend.bottom ?? 0)) > MIN_EXTEND_DELTA) {
+              updatedExtend.bottom = clamped;
+              changed = true;
+            }
+            break;
+          }
+          default:
+            break;
+        }
+
+        if (changed) {
+          setDragState(prev => (prev ? { ...prev, extend: updatedExtend } : prev));
+        }
+      });
+    };
+
+    const handleUp = (event) => {
+      const currentDrag = dragStateRef.current;
+      if (!currentDrag) return;
+      event.preventDefault();
+      if (dragRafRef.current) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
+      const hasExtend =
+        currentDrag.extend &&
+        Object.values(currentDrag.extend).some(value => Math.abs(value) > 0.5);
+      if (hasExtend) {
+        onCommit?.(currentDrag.shapeId, currentDrag.extend);
+      }
+      dragStateRef.current = null;
+      setDragState(null);
+    };
+
+    window.addEventListener('pointermove', handleMove, { passive: false });
+    window.addEventListener('pointerup', handleUp, { passive: false });
+    window.addEventListener('pointercancel', handleUp, { passive: false });
+
+    return () => {
+      if (dragRafRef.current) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    };
+  }, [editorRef, onCommit]);
+
+  const handlePointerDown = useCallback((direction, event) => {
+    if (!selectionBounds || !editorRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const editor = editorRef.current;
+    const startPage = editor.screenToPage({ x: event.clientX, y: event.clientY });
+    const pageBounds = selectionBounds.pageBounds || {};
+    const initialWidth = pageBounds.width ?? pageBounds.w ?? 0;
+    const initialHeight = pageBounds.height ?? pageBounds.h ?? 0;
+    const nextState = {
+      direction,
+      startPage,
+      extend: { top: 0, right: 0, bottom: 0, left: 0 },
+      shapeId: selectionBounds.shapeId,
+      initialWidth,
+      initialHeight
+    };
+    dragStateRef.current = nextState;
+    setDragState(nextState);
+  }, [editorRef, selectionBounds]);
+
+  const previewRect = useMemo(() => {
+    if (!selectionBounds) return null;
+    const pageBounds = selectionBounds.pageBounds;
+    const widthRatio = pageBounds?.width ? selectionBounds.width / pageBounds.width : 1;
+    const heightRatio = pageBounds?.height ? selectionBounds.height / pageBounds.height : 1;
+    if (!dragState) {
+      return {
+        left: selectionBounds.left,
+        top: selectionBounds.top,
+        width: selectionBounds.width,
+        height: selectionBounds.height
+      };
+    }
+    return {
+      left: selectionBounds.left - (dragState.extend.left * widthRatio),
+      top: selectionBounds.top - (dragState.extend.top * heightRatio),
+      width: selectionBounds.width + (dragState.extend.left + dragState.extend.right) * widthRatio,
+      height: selectionBounds.height + (dragState.extend.top + dragState.extend.bottom) * heightRatio
+    };
+  }, [selectionBounds, dragState]);
+
+  if (!selectionBounds || !previewRect || !containerRef.current) {
+    return null;
+  }
+
+  const handleSize = 12;
+  const handles = [
+    {
+      key: 'top',
+      style: {
+        left: selectionBounds.left + selectionBounds.width / 2 - handleSize / 2,
+        top: selectionBounds.top - handleSize / 2
+      },
+      cursor: 'ns-resize'
+    },
+    {
+      key: 'right',
+      style: {
+        left: selectionBounds.left + selectionBounds.width - handleSize / 2,
+        top: selectionBounds.top + selectionBounds.height / 2 - handleSize / 2
+      },
+      cursor: 'ew-resize'
+    },
+    {
+      key: 'bottom',
+      style: {
+        left: selectionBounds.left + selectionBounds.width / 2 - handleSize / 2,
+        top: selectionBounds.top + selectionBounds.height - handleSize / 2
+      },
+      cursor: 'ns-resize'
+    },
+    {
+      key: 'left',
+      style: {
+        left: selectionBounds.left - handleSize / 2,
+        top: selectionBounds.top + selectionBounds.height / 2 - handleSize / 2
+      },
+      cursor: 'ew-resize'
+    }
+  ];
   
   return (
-    <div className={clsx(
-      "h-full border-l bg-white flex flex-col transition-all duration-300",
-      isCollapsed ? "w-12" : "w-80"
-    )}>
-      <div className="p-4 border-b flex items-center justify-between">
-        {!isCollapsed && (
-        <h2 className="text-lg font-semibold text-gray-900">AI 设计师</h2>
+    <div className="absolute inset-0 pointer-events-none select-none z-[1000]">
+      <div
+        className={clsx(
+          'absolute border-2 border-blue-400 bg-blue-200/10 pointer-events-none rounded transition-all',
+          highlight && 'shadow-[0_0_0_6px_rgba(59,130,246,0.2)]'
         )}
-        <button
-          onClick={onToggleCollapse}
-          className={clsx(
-            "p-1 rounded-md hover:bg-gray-100 transition-colors",
-            isCollapsed && "mx-auto"
-          )}
-          title={isCollapsed ? "展开" : "收起"}
-        >
-          {isCollapsed ? (
-            <ChevronLeft className="w-5 h-5 text-gray-600" />
-          ) : (
-            <ChevronRight className="w-5 h-5 text-gray-600" />
-          )}
-        </button>
-      </div>
-      
-      {!isCollapsed && (
-        <>
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* 欢迎语 */}
-        <div className="bg-blue-50 rounded-lg p-3">
-          <div className="flex items-start gap-2">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 flex items-center justify-center">
-              <MessageSquare className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <div className="font-medium text-gray-900">AI 设计师</div>
-              <p className="text-sm text-gray-600 mt-1">我是你的 AI 设计师，让我们开始今天的创作吧！</p>
-            </div>
-          </div>
-        </div>
-        
-        {/* 快捷问题 */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-gray-500">快捷提问</span>
-            <button
-              onClick={onRefreshQuestions}
-              className="text-xs text-blue-600 hover:text-blue-800 flex items-center"
-            >
-              <RefreshCw className="w-3 h-3 mr-1" />
-              换一换
-            </button>
-          </div>
-          <div className="space-y-2">
-            {quickQuestions.map((question, index) => (
-              <button
-                key={index}
-                onClick={() => {
-                  setInputMessage(question);
-                  onSendMessage(question);
-                }}
-                className="w-full text-left p-2 text-sm bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
-              >
-                {question}
-              </button>
-            ))}
-          </div>
-        </div>
-        
-        {/* 消息对话 */}
-        <div className="space-y-4">
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={clsx(
-                'flex gap-2',
-                message.role === 'user' ? 'justify-end' : 'justify-start'
-              )}
-            >
-              {message.role === 'assistant' && (
-                <div className="w-8 h-8 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-                  <MessageSquare className="w-4 h-4 text-white" />
-                </div>
-              )}
-              <div
-                className={clsx(
-                  'max-w-[80%] rounded-lg p-3',
-                  message.role === 'user'
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-100 text-gray-900'
-                )}
-              >
-                <div className="text-sm whitespace-pre-wrap">{message.content}</div>
-                {message.role === 'assistant' && (
-                  <div className="flex items-center gap-2 mt-2">
-                    <button className="text-xs text-gray-500 hover:text-gray-700 flex items-center">
-                      <ThumbsUp className="w-3 h-3 mr-1" />
-                      有用
-                    </button>
-                    <button className="text-xs text-gray-500 hover:text-gray-700 flex items-center">
-                      <ThumbsDown className="w-3 h-3 mr-1" />
-                      没用
-                    </button>
-                  </div>
-                )}
-              </div>
-              {message.role === 'user' && (
-                <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center flex-shrink-0">
-                  <User className="w-4 h-4 text-gray-600" />
-                </div>
-              )}
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-      
-      {/* 消息输入 */}
-      <div className="p-4 border-t">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && onSendMessage()}
-            placeholder="向 AI 设计师提问..."
-            className="flex-1 p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-          <button
-            onClick={() => onSendMessage()}
-            disabled={isSending || !inputMessage.trim()}
-            className={clsx(
-              'p-2 rounded-md transition-colors',
-              isSending || !inputMessage.trim()
-                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                : 'bg-blue-500 text-white hover:bg-blue-600'
-            )}
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-        </>
-      )}
+        style={{
+          left: previewRect.left,
+          top: previewRect.top,
+          width: previewRect.width,
+          height: previewRect.height
+        }}
+      />
+      {handles.map(handle => (
+        <div
+          key={handle.key}
+          className="absolute bg-blue-500 border-2 border-white rounded-full pointer-events-auto hover:scale-125 transition-transform"
+          style={{
+            width: 14,
+            height: 14,
+            ...handle.style,
+            cursor: handle.cursor
+          }}
+          onPointerDown={(event) => handlePointerDown(handle.key, event)}
+        />
+      ))}
     </div>
   );
 };
+
+const ImageActionBar = ({
+  selectionBounds,
+  fillMode,
+  onFillModeChange,
+  onStartSmear,
+  onDownload,
+  onExtendHint
+}) => {
+  if (!selectionBounds) return null;
+
+  const buttonClass = (isPrimary) =>
+    clsx(
+      'inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm transition-colors',
+      isPrimary ? 'bg-blue-50 text-blue-600 hover:bg-blue-100' : 'text-gray-600 hover:bg-gray-100'
+    );
+
+  // 计算操作栏位置，确保在可视范围内
+  const barWidth = 400; // 操作栏估计宽度
+  const barLeft = Math.max(barWidth / 2, Math.min(
+    selectionBounds.left + selectionBounds.width / 2,
+    window.innerWidth - barWidth / 2 - 100
+  ));
+  const barTop = Math.max(80, selectionBounds.top - 72);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-[9999]">
+      <div
+        className="pointer-events-auto flex items-center gap-2 bg-white border shadow-lg rounded-full px-3 py-2 absolute"
+        style={{
+          left: `${barLeft}px`,
+          top: `${barTop}px`,
+          transform: 'translateX(-50%)',
+          willChange: 'transform'
+        }}
+      >
+        <button
+          className={buttonClass(true)}
+          onClick={onExtendHint}
+          type="button"
+        >
+          <Expand className="w-4 h-4" />
+          扩展
+        </button>
+        <button
+          className={buttonClass(true)}
+          onClick={onStartSmear}
+          type="button"
+        >
+          <Brush className="w-4 h-4" />
+          涂抹
+        </button>
+        <div className="h-6 w-px bg-gray-200" />
+        <div className="flex items-center gap-1 bg-gray-100 rounded-full px-2 py-1 text-xs text-gray-600">
+          <span className="text-gray-500">填充</span>
+          <button
+            type="button"
+          className={clsx(
+              'px-2 py-0.5 rounded-full transition-colors',
+              fillMode === 'white' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'
+            )}
+            onClick={() => onFillModeChange?.('white')}
+          >
+            白色
+        </button>
+            <button
+            type="button"
+            className={clsx(
+              'px-2 py-0.5 rounded-full transition-colors',
+              fillMode === 'transparent' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'
+            )}
+            onClick={() => onFillModeChange?.('transparent')}
+          >
+            透明
+            </button>
+          </div>
+        <div className="h-6 w-px bg-gray-200" />
+              <button
+          className={buttonClass(false)}
+          onClick={onDownload}
+          type="button"
+        >
+          <Download className="w-4 h-4" />
+          下载
+              </button>
+          </div>
+        </div>
+  );
+};
+
+const SelectionOverlay = ({
+  containerRef,
+  editorRef,
+  session,
+  setSession,
+  viewportRevision,
+  onApply,
+  onCancel
+}) => {
+  const [displayStroke, setDisplayStroke] = useState([]);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [brushSize, setBrushSize] = useState(20);
+  const [eraseMode, setEraseMode] = useState('erase'); // 'erase' 或 'inverse'
+  const strokeRef = useRef([]);
+  const canvasRef = useRef(null);
+  const maskCanvasRef = useRef(null);
+  const strokeFlushRafRef = useRef(null);
+  const previewCanvasDisplayRef = useRef(null);
+  const previewVisibleRef = useRef(false);
+  const [isPreviewVisible, setIsPreviewVisible] = useState(false);
+  const [maskImageUrl, setMaskImageUrl] = useState(null); // 蒙版图像
+
+  const showPreview = useCallback(() => {
+    if (!previewVisibleRef.current) {
+      previewVisibleRef.current = true;
+      setIsPreviewVisible(true);
+    }
+  }, []);
+
+  const hidePreview = useCallback(() => {
+    if (previewVisibleRef.current) {
+      previewVisibleRef.current = false;
+      setIsPreviewVisible(false);
+    }
+  }, []);
+
+  const bounds = useMemo(() => {
+    if (!session || !editorRef.current || !containerRef.current) return null;
+    const editor = editorRef.current;
+    const pageBounds = session.pageBounds;
+    const topLeft = editor.pageToScreen({ x: pageBounds.minX, y: pageBounds.minY });
+    const bottomRight = editor.pageToScreen({ x: pageBounds.maxX, y: pageBounds.maxY });
+    const containerRect = containerRef.current.getBoundingClientRect();
+    return {
+      left: topLeft.x - containerRect.left,
+      top: topLeft.y - containerRect.top,
+      width: bottomRight.x - topLeft.x,
+      height: bottomRight.y - topLeft.y
+    };
+  }, [session, editorRef, containerRef, viewportRevision]);
+
+  const paintPreviewCanvas = useCallback(
+    (customPainter, { forceShow = false } = {}) => {
+      if (!bounds || !previewCanvasDisplayRef.current || !canvasRef.current) return;
+      const displayCanvas = previewCanvasDisplayRef.current;
+      const ctx = displayCanvas.getContext('2d');
+      if (!ctx) return;
+      const baseCanvas = canvasRef.current;
+      ctx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+      ctx.drawImage(baseCanvas, 0, 0, displayCanvas.width, displayCanvas.height);
+      if (typeof customPainter === 'function') {
+        customPainter(ctx, displayCanvas.width, displayCanvas.height);
+      }
+      if (typeof customPainter === 'function' || forceShow) {
+        showPreview();
+      } else {
+        hidePreview();
+      }
+    },
+    [bounds, showPreview, hidePreview]
+  );
+
+  useEffect(() => {
+    strokeRef.current = [];
+    setDisplayStroke([]);
+    setIsDrawing(false);
+    if (!session) {
+      hidePreview();
+    }
+  }, [session, hidePreview]);
+
+  // 初始化画布用于实时预览
+  useEffect(() => {
+    if (!session || !editorRef.current || !bounds) return;
+    
+    const editor = editorRef.current;
+    const shape = editor.getShape(session.shapeId);
+    if (!shape || shape.type !== 'image') return;
+    
+    const assetId = shape.props?.assetId;
+    if (!assetId) return;
+    
+    const asset = editor.getAsset(assetId);
+    if (!asset || asset.type !== 'image' || !asset.props?.src) return;
+    
+    // 加载原始图像
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      // 创建画布
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      canvasRef.current = canvas;
+      
+      // 创建蒙版画布
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = img.width;
+      maskCanvas.height = img.height;
+      maskCanvasRef.current = maskCanvas;
+      
+      // 设置初始预览
+      paintPreviewCanvas();
+    };
+    img.src = asset.props.src;
+    
+    // 清理函数
+    return () => undefined;
+  }, [session, editorRef, bounds, paintPreviewCanvas]);
+
+  useEffect(() => {
+    if (!bounds || !canvasRef.current) return;
+    paintPreviewCanvas();
+  }, [bounds, paintPreviewCanvas]);
+
+  const updateRealtimePreview = useCallback(
+    (points) => {
+      if (!session || !bounds) return;
+      paintPreviewCanvas((ctx, width, height) => {
+        if (!points.length) return;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        const brushPx =
+          brushSize *
+          (width / (session.pageBounds.width || session.pageBounds.w || 1));
+        ctx.lineWidth = brushPx * 2;
+        ctx.beginPath();
+        points.forEach((point, index) => {
+          const x = point.x * width;
+          const y = point.y * height;
+          if (index === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        });
+        ctx.stroke();
+      });
+      showPreview();
+    },
+    [session, bounds, brushSize, paintPreviewCanvas, showPreview]
+  );
+
+  useEffect(() => {
+    if (!isDrawing || !session || !canvasRef.current || !maskCanvasRef.current) return;
+
+    const scheduleStrokeFlush = () => {
+      if (strokeFlushRafRef.current) return;
+      strokeFlushRafRef.current = requestAnimationFrame(() => {
+        strokeFlushRafRef.current = null;
+        setDisplayStroke([...strokeRef.current]);
+        updateRealtimePreview(strokeRef.current);
+      });
+    };
+
+    const handleMove = (event) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const pagePoint = editor.screenToPage({ x: event.clientX, y: event.clientY });
+      const normalized = normalizePointWithinBounds(pagePoint, session.pageBounds);
+      strokeRef.current.push(normalized);
+      scheduleStrokeFlush();
+    };
+
+    const handleUp = async (event) => {
+      event.preventDefault();
+      setIsDrawing(false);
+      
+      
+      // 生成 mask 并自动保存到图层
+      if (strokeRef.current.length > 2 && canvasRef.current) {
+        const canvas = canvasRef.current;
+        
+        // 创建 mask canvas（黑白蒙版）
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = canvas.width;
+        maskCanvas.height = canvas.height;
+        const maskCtx = maskCanvas.getContext('2d');
+        
+        // 填充白色背景（未擦除区域）
+        maskCtx.fillStyle = '#ffffff';
+        maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+        
+        // 绘制黑色涂抹路径（要擦除的区域）
+        maskCtx.strokeStyle = '#000000';
+        maskCtx.globalCompositeOperation = 'source-over';
+        maskCtx.lineCap = 'round';
+        maskCtx.lineJoin = 'round';
+        
+        const brushPx = brushSize * (canvas.width / (session.pageBounds.width || 1));
+        maskCtx.lineWidth = brushPx * 2;
+        
+        if (strokeRef.current.length > 0) {
+          maskCtx.beginPath();
+          strokeRef.current.forEach((point, index) => {
+            const x = point.x * canvas.width;
+            const y = point.y * canvas.height;
+            
+            if (index === 0) {
+              maskCtx.moveTo(x, y);
+            } else {
+              maskCtx.lineTo(x, y);
+            }
+          });
+          maskCtx.stroke();
+        }
+        
+        // 保存 mask 图像
+        const maskDataUrl = maskCanvas.toDataURL('image/png');
+        setMaskImageUrl(maskDataUrl);
+        
+        // 保存路径点用于更新 session
+        const finalPoints = [...strokeRef.current];
+        
+        // 更新 displayStroke 确保显示
+        setDisplayStroke(finalPoints);
+        
+        // 生成最终预览（保持黑色半透明路径显示）
+        // 直接在这里生成预览，而不是调用 updateRealtimePreview
+        const previewCanvas = document.createElement('canvas');
+        previewCanvas.width = canvas.width;
+        previewCanvas.height = canvas.height;
+        const previewCtx = previewCanvas.getContext('2d');
+        
+        // 绘制当前图像
+        previewCtx.drawImage(canvas, 0, 0);
+        
+        // 绘制黑色半透明涂抹轨迹
+        previewCtx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+        previewCtx.globalCompositeOperation = 'source-over';
+        previewCtx.lineCap = 'round';
+        previewCtx.lineJoin = 'round';
+        
+        // 重用之前计算的 brushPx
+        previewCtx.lineWidth = brushPx * 2;
+        
+        if (finalPoints.length > 0) {
+          previewCtx.beginPath();
+          finalPoints.forEach((point, index) => {
+            const x = point.x * canvas.width;
+            const y = point.y * canvas.height;
+            if (index === 0) {
+              previewCtx.moveTo(x, y);
+            } else {
+              previewCtx.lineTo(x, y);
+            }
+          });
+          previewCtx.stroke();
+        }
+        
+        // 更新预览图像
+        const finalPreviewUrl = previewCanvas.toDataURL('image/png');
+        paintPreviewCanvas((ctx, width, height) => {
+          ctx.drawImage(previewCanvas, 0, 0, width, height);
+        });
+        
+        // 恢复原始图片透明度，并应用预览
+        if (editorRef.current) {
+          const editor = editorRef.current;
+          const shape = editor.getShape(session.shapeId);
+          if (shape) {
+            // 1. 恢复透明度
+            editor.updateShapes([{
+              ...shape,
+              opacity: 1
+            }]);
+            
+            // 2. 创建新的资产并应用到 shape
+            const assetId = `asset:${Date.now()}-preview`;
+            editor.createAssets([{
+              id: assetId,
+              type: 'image',
+              typeName: 'asset',
+              props: {
+                name: 'smear-preview.png',
+                src: finalPreviewUrl,
+                w: canvasRef.current.width,
+                h: canvasRef.current.height,
+                mimeType: 'image/png',
+                isAnimated: false
+              },
+              meta: {}
+            }]);
+            
+            // 3. 更新 shape 使用新资产
+            editor.updateShapes([{
+              ...shape,
+              props: {
+                ...shape.props,
+                assetId: assetId
+              }
+            }]);
+            
+          }
+        }
+        
+        // 更新 session 状态为 'ready'，显示操作按钮
+        setSession(prev => ({
+          ...prev,
+          status: 'ready',
+          points: finalPoints,
+          maskDataUrl: maskDataUrl
+        }));
+        
+        // 不要清空 strokeRef，保持预览显示
+        // strokeRef.current = [];  ❌ 这会导致预览消失
+      }
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+
+    return () => {
+      if (strokeFlushRafRef.current) {
+        cancelAnimationFrame(strokeFlushRafRef.current);
+        strokeFlushRafRef.current = null;
+      }
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    };
+  }, [editorRef, isDrawing, session, brushSize, eraseMode, onApply, updateRealtimePreview, paintPreviewCanvas]);
+
+  const handlePointerDown = useCallback((event) => {
+    if (!session || session.status === 'ready') return;
+    event.preventDefault();
+    event.stopPropagation();
+    const editor = editorRef.current;
+    if (!editor) return;
+    const pagePoint = editor.screenToPage({ x: event.clientX, y: event.clientY });
+    if (!isPointInsideBounds(pagePoint, session.pageBounds)) {
+      return;
+    }
+    strokeRef.current = [normalizePointWithinBounds(pagePoint, session.pageBounds)];
+    setDisplayStroke([...strokeRef.current]);
+    setIsDrawing(true);
+  }, [editorRef, session]);
+
+  const previewPoints = useMemo(() => {
+    if (!bounds) return null;
+    const points = session?.status === 'ready' ? session.points : displayStroke;
+    if (!points || points.length < 2) return null;
+    return points.map(point => ({
+      x: bounds.left + point.x * bounds.width,
+      y: bounds.top + point.y * bounds.height
+    }));
+  }, [bounds, displayStroke, session]);
+
+  if (!session || !bounds) {
+    return null;
+  }
+
+  const pathData =
+    previewPoints && previewPoints.length > 1
+      ? previewPoints.reduce(
+          (acc, point, index) => `${acc}${index === 0 ? 'M' : 'L'}${point.x} ${point.y} `,
+          ''
+        ) + (session.tool === 'lasso' && session.status === 'ready' ? 'Z' : '')
+      : null;
+
+  // 处理应用擦除/保留（同时自动保存 mask）
+  const handleApply = useCallback(async (mode) => {
+    if (session.status !== 'ready' || !onApply || !canvasRef.current || !maskImageUrl) return;
+    
+    hidePreview();
+    
+    const canvas = canvasRef.current;
+    const editor = editorRef.current;
+    if (!editor) return;
+    
+    const shape = editor.getShape(session.shapeId);
+    if (!shape || !shape.props?.assetId) return;
+    
+    // 使用传入的 mode，而不是状态中的 eraseMode
+    const currentMode = mode || eraseMode;
+    
+    // 1. 保留模式不生成蒙版，擦除模式才保存
+    const shouldSaveMask = currentMode !== 'inverse';
+    if (shouldSaveMask) {
+      onApply('save-mask', brushSize, null, maskImageUrl);
+    }
+    
+    // 2. 应用擦除/保留效果
+    const maskImg = new window.Image();
+    maskImg.crossOrigin = 'anonymous';
+    maskImg.onload = async () => {
+      // 创建结果画布
+      const resultCanvas = document.createElement('canvas');
+      resultCanvas.width = canvas.width;
+      resultCanvas.height = canvas.height;
+      const ctx = resultCanvas.getContext('2d');
+      
+      // 绘制原图
+      ctx.drawImage(canvas, 0, 0);
+      
+      // 创建 alpha mask（黑色区域 = 选中区域）
+      const alphaMask = document.createElement('canvas');
+      alphaMask.width = canvas.width;
+      alphaMask.height = canvas.height;
+      const alphaMaskCtx = alphaMask.getContext('2d');
+      
+      // 加载 mask 图像（白色背景 + 黑色路径）
+      alphaMaskCtx.drawImage(maskImg, 0, 0);
+      
+      // 将黑白 mask 转换为 alpha mask
+      const imageData = alphaMaskCtx.getImageData(0, 0, alphaMask.width, alphaMask.height);
+      const data = imageData.data;
+      
+      for (let i = 0; i < data.length; i += 4) {
+        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        // 黑色(0) -> alpha=255 (不透明，选中区域)
+        // 白色(255) -> alpha=0 (透明，未选中区域)
+        const alpha = 255 - brightness;
+        data[i] = 0;
+        data[i + 1] = 0;
+        data[i + 2] = 0;
+        data[i + 3] = alpha;
+      }
+      
+      alphaMaskCtx.putImageData(imageData, 0, 0);
+      
+      // 应用 mask
+      if (currentMode === 'erase') {
+        // 擦除模式：destination-out（移除 alpha 区域）
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.drawImage(alphaMask, 0, 0);
+      } else {
+        // 保留模式：destination-in（只保留 alpha 区域）
+        ctx.globalCompositeOperation = 'destination-in';
+        ctx.drawImage(alphaMask, 0, 0);
+      }
+      
+      const finalImageUrl = resultCanvas.toDataURL('image/png');
+      await onApply(currentMode, brushSize, finalImageUrl);
+      
+      // 更新 canvas 为应用后的结果
+      canvasRef.current = resultCanvas;
+    };
+    maskImg.src = maskImageUrl;
+  }, [session, eraseMode, brushSize, onApply, maskImageUrl, editorRef, hidePreview, showPreview]);
+
+  // 处理保存为蒙版图层
+  const handleSaveAsMask = useCallback(async () => {
+    if (session.status !== 'ready' || !onApply || !maskImageUrl) return;
+    
+    // 调用 onApply 并传递 'save-mask' 模式和 mask 数据
+    await onApply('save-mask', brushSize, null, session.maskDataUrl || maskImageUrl);
+  }, [session, brushSize, onApply, maskImageUrl]);
+
+  // 调试日志
+  
+  return (
+    <>
+      {/* 实时预览层 - 显示涂抹后的效果 */}
+      {bounds && (
+        <canvas
+          ref={previewCanvasDisplayRef}
+          className="absolute pointer-events-none transition-opacity duration-100"
+          style={{
+            left: `${bounds.left}px`,
+            top: `${bounds.top}px`,
+            width: `${bounds.width}px`,
+            height: `${bounds.height}px`,
+            zIndex: 998,
+            opacity: isPreviewVisible ? 1 : 0
+          }}
+          width={Math.max(1, Math.round(bounds.width))}
+          height={Math.max(1, Math.round(bounds.height))}
+        />
+      )}
+      
+      {/* 涂抹画布区域 - 只在绘制时可交互 */}
+      {session.status !== 'ready' && (
+        <div
+          className="absolute inset-0 pointer-events-auto"
+          style={{ 
+            zIndex: 1000,
+            cursor: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="${brushSize}" height="${brushSize}" viewBox="0 0 ${brushSize} ${brushSize}"><circle cx="${brushSize/2}" cy="${brushSize/2}" r="${brushSize/2}" fill="rgba(0,0,0,0.5)" stroke="black" stroke-width="2"/></svg>') ${brushSize/2} ${brushSize/2}, crosshair`
+          }}
+          onPointerDown={handlePointerDown}
+        />
+      )}
+
+      {/* 涂抹工具控制栏 */}
+      <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-[9999] pointer-events-auto">
+        <div className="flex items-center gap-3 bg-white/95 border shadow-xl rounded-full px-4 py-2">
+          {/* 如果 status 为 'ready'，显示应用选项 */}
+          {session.status === 'ready' ? (
+            <>
+              <span className="text-sm font-medium text-gray-700">选择操作：</span>
+              
+              <div className="h-6 w-px bg-gray-300" />
+              
+              {/* 保留按钮 */}
+              <button
+                type="button"
+                className="px-4 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-md text-sm font-medium transition-colors"
+                onClick={() => {
+                  handleApply('inverse');
+                }}
+              >
+                保留
+                    </button>
+              
+              {/* 擦除按钮 */}
+              <button
+                type="button"
+                className="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-md text-sm font-medium transition-colors"
+                onClick={() => {
+                  handleApply('erase');
+                }}
+              >
+                擦除
+                    </button>
+              
+              <div className="h-6 w-px bg-gray-300" />
+              
+              {/* 取消按钮 */}
+              <button
+                type="button"
+                className="px-3 py-1 bg-gray-500 hover:bg-gray-600 text-white rounded-md text-sm transition-colors"
+                onClick={() => {
+                  if (onCancel) onCancel();
+                }}
+              >
+                取消
+              </button>
+            </>
+          ) : (
+            <>
+              {/* 绘制模式下的控制 */}
+              {/* 笔刷大小 */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">笔刷:</span>
+          <input
+                  type="range"
+                  min="5"
+                  max="100"
+                  value={brushSize}
+                  onChange={(e) => setBrushSize(Number(e.target.value))}
+                  className="w-24"
+                />
+                <span className="text-xs font-medium text-gray-700 w-6">{brushSize}</span>
+              </div>
+
+              <div className="h-6 w-px bg-gray-300" />
+
+              {/* 完成按钮 */}
+          <button
+                type="button"
+                className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded-md text-xs transition-colors"
+                onClick={() => {
+                  if (onCancel) onCancel();
+                }}
+              >
+                完成
+          </button>
+        </>
+      )}
+    </div>
+      </div>
+    </>
+  );
+};
+
+
 
 // 主组件
 const OuzhiArtPlatform = () => {
@@ -252,8 +1049,14 @@ const OuzhiArtPlatform = () => {
   const [generatedImages, setGeneratedImages] = useState([]);
   // 用于跟踪生成过程中创建的图层ID，在所有图片添加完成后清除多选状态
   const generatedLayerIdsRef = useRef(new Set());
+  // 跟踪当前正在轮询的 promptId，避免重复轮询
+  const activePromptIdRef = useRef(null);
+  // 保存当前轮询控制器，便于在发起新的生成任务时取消旧的轮询
+  const pollControllerRef = useRef(null);
   // 用于保存最新的layers状态，避免闭包问题（先初始化为null，稍后更新）
   const layersRef = useRef(null);
+  // 记录每个shape的原始图像和裁剪/扩展状态
+  const imageCropStateRef = useRef(new Map());
   // 用于保存 assetId 到文件名的映射（用于图层命名）
   const assetFileNameMapRef = useRef(new Map());
   // 记录 assetId -> 图层ID 列表映射
@@ -262,34 +1065,66 @@ const OuzhiArtPlatform = () => {
   // 画布状态
   const [activeTool, setActiveTool] = useState('select');
   const [zoomLevel, setZoomLevel] = useState(1);
+  const containerRef = useRef(null);
+  const editorRef = useRef(null);
+  const [strokeColor, setStrokeColor] = useState('#000000');
+  const [fillColor, setFillColor] = useState('transparent');
+  const [brushSize, setBrushSize] = useState(3);
+  const [opacity, setOpacity] = useState(1);
+  const [showAssistPanel, setShowAssistPanel] = useState(false);
+  const [showServiceManager, setShowServiceManager] = useState(false);
+  const [diffView, setDiffView] = useState(null);
+  const [workflowParams, setWorkflowParams] = useState({});
+  const [selectedWorkflowData, setSelectedWorkflowData] = useState(null);
+  const [selectionSession, setSelectionSession] = useState(null);
+  const [selectionAction, setSelectionAction] = useState(null);
+  const [cropFillMode, setCropFillMode] = useState('white');
+  const [selectedImageInfo, setSelectedImageInfo] = useState(null);
+  const [viewportRevision, setViewportRevision] = useState(0);
+  const [extendHighlight, setExtendHighlight] = useState(false);
+  const extendHighlightTimeoutRef = useRef(null);
   
   // 边栏收起状态
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
   const [isLayerPanelCollapsed, setIsLayerPanelCollapsed] = useState(false);
-  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
-  
-  // AI对话状态
-  const [messages, setMessages] = useState([
-    { role: 'assistant', content: '你好！我是你的 AI 设计师，有什么我可以帮助你的吗？' }
-  ]);
-  const [inputMessage, setInputMessage] = useState('');
-  const [quickQuestions, setQuickQuestions] = useState([
-    '你能为我做什么？',
-    '科技公司品牌 Logo',
-    '游戏图标设计',
-    '海报设计建议'
-  ]);
-  const [isSending, setIsSending] = useState(false);
   
   // 系统状态
   const [points, setPoints] = useState(1280);
   const [memberStatus, setMemberStatus] = useState('高级会员');
+  
+  const triggerExtendHighlight = useCallback(() => {
+    setExtendHighlight(true);
+    if (extendHighlightTimeoutRef.current) {
+      clearTimeout(extendHighlightTimeoutRef.current);
+    }
+    extendHighlightTimeoutRef.current = setTimeout(() => {
+      setExtendHighlight(false);
+    }, 1000);
+  }, []);
+  
+  // 取消当前轮询（用于在用户发起新的生成时停止旧的轮询）
+  const cancelActivePoll = useCallback(() => {
+    if (pollControllerRef.current) {
+      pollControllerRef.current.cancelled = true;
+      pollControllerRef.current = null;
+    }
+    activePromptIdRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (extendHighlightTimeoutRef.current) {
+        clearTimeout(extendHighlightTimeoutRef.current);
+      }
+    };
+  }, []);
   
   // 使用增强的图层hook
   const { 
     layers, 
     activeLayerId, 
     layerGroups,
+    masks,
     setLayers, 
     addLayer,
     deleteLayer,
@@ -303,19 +1138,108 @@ const OuzhiArtPlatform = () => {
     createLayerGroup,
     deleteLayerGroup,
     renameLayerGroup,
-    mergeMultipleLayers
+    createMaskForLayer,
+    updateMask,
+    mergeMultipleLayers,
+    splitLayer,
+    duplicateLayer,
+    cloneLayer,
+    fuseLayers
   } = useEnhancedLayers([]);
   
   // 更新 layersRef，确保始终使用最新的 layers
   layersRef.current = layers;
+  useEffect(() => {
+    if (!isEditorInitialized || !editorRef.current) return;
+    const editor = editorRef.current;
+
+    const refreshSelection = () => {
+      const selection = editor.getSelectedShapes().filter(shape => shape.type === 'image');
+      if (selection.length === 1) {
+        const shape = selection[0];
+        const bounds = editor.getShapePageBounds(shape.id);
+        if (bounds) {
+          setSelectedImageInfo({ shapeId: shape.id, bounds });
+          return;
+        }
+      }
+      setSelectedImageInfo(null);
+    };
+
+    const unsubscribe = editor.store.listen((event) => {
+      refreshSelection();
+      const mutation = event.changes || {};
+      const updated = mutation.updated || {};
+      const cameraChanged = Object.values(updated).some(record => record.typeName === 'camera');
+      if (cameraChanged) {
+        setViewportRevision(prev => prev + 1);
+      }
+    });
+
+    refreshSelection();
+
+    return () => unsubscribe();
+  }, [isEditorInitialized]);
+
+  useEffect(() => {
+    const handleResize = () => setViewportRevision(prev => prev + 1);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (selectionSession && selectionSession.layerId !== activeLayerId) {
+      setSelectionSession(null);
+    }
+  }, [activeLayerId, selectionSession]);
+
+  const selectionScreenBounds = useMemo(() => {
+    if (!selectedImageInfo || !editorRef.current || !containerRef.current) return null;
+    const editor = editorRef.current;
+    const bounds = selectedImageInfo.bounds || editor.getShapePageBounds(selectedImageInfo.shapeId);
+    if (!bounds) return null;
+    const topLeft = editor.pageToScreen({ x: bounds.minX, y: bounds.minY });
+    const bottomRight = editor.pageToScreen({ x: bounds.maxX, y: bounds.maxY });
+    const containerRect = containerRef.current.getBoundingClientRect();
+    return {
+      shapeId: selectedImageInfo.shapeId,
+      left: topLeft.x - containerRect.left,
+      top: topLeft.y - containerRect.top,
+      width: bottomRight.x - topLeft.x,
+      height: bottomRight.y - topLeft.y,
+      pageBounds: bounds
+    };
+  }, [selectedImageInfo, viewportRevision]);
+
   
   // 多选图层状态
   const [selectedLayerIds, setSelectedLayerIds] = useState(new Set());
+
+  const getLayerShapeIds = useCallback((layer) => {
+    if (!layer) return [];
+    if (Array.isArray(layer.shapeIds) && layer.shapeIds.length > 0) {
+      return layer.shapeIds;
+    }
+    if (Array.isArray(layer.objects) && layer.objects.length > 0) {
+      return layer.objects.map(obj => obj.id).filter(Boolean);
+    }
+    return [];
+  }, []);
+
+  const getLayerIdByShapeId = useCallback((shapeId) => {
+    if (!shapeId) return null;
+    const targetLayer = layers.find(layer => {
+      const shapeIds = getLayerShapeIds(layer);
+      return shapeIds.includes(shapeId);
+    });
+    return targetLayer?.id || null;
+  }, [layers, getLayerShapeIds]);
   
   // 使用图层历史hook
   const { 
     history, 
     currentIndex: historyIndex,
+    save: saveLayerHistory,
     undo: undoHistory,
     redo: redoHistory,
     canUndo,
@@ -388,7 +1312,6 @@ const OuzhiArtPlatform = () => {
     }
 
     if (relatedLayers.length === 0) {
-      console.info('[LayerNameDebug] updateLayerNamesForAsset: 无关联图层', assetId);
       return;
     }
 
@@ -408,7 +1331,6 @@ const OuzhiArtPlatform = () => {
           newName: uniqueName,
           index
         });
-        console.info('[LayerNameDebug] updateLayerNamesForAsset: rename layer', layer.id, layer.name, '->', uniqueName);
         renameLayer(layer.id, uniqueName);
       }
     });
@@ -451,13 +1373,11 @@ const OuzhiArtPlatform = () => {
       
       logger.debug(`[图层创建] 尝试提取文件名，obj.data:`, obj.data);
       logger.debug(`[图层创建] obj.data.props:`, obj.data?.props);
-      console.info('[LayerNameDebug] shape added', obj);
       
       // 1. 首先检查文件名映射（如果之前保存过）
       if (assetId && assetFileNameMapRef.current.has(assetId)) {
         fileName = assetFileNameMapRef.current.get(assetId);
         logger.debug(`[图层创建] 从文件名映射获取:`, fileName);
-        console.info('[LayerNameDebug] filename from map', fileName);
       }
       
       // 2. 尝试从 asset 中获取文件名（立即尝试，不等待延迟）
@@ -467,13 +1387,11 @@ const OuzhiArtPlatform = () => {
           // 先尝试从映射中获取（如果之前已经保存过）
           if (assetFileNameMapRef.current.has(assetId)) {
             fileName = assetFileNameMapRef.current.get(assetId);
-            console.info('[LayerNameDebug] filename from map (immediate)', fileName);
           } else {
             // 尝试从 store 中获取 asset
             if (editorRef.current.getAsset) {
               asset = editorRef.current.getAsset(assetId);
               logger.debug(`[图层创建] 通过 getAsset 获取 asset:`, asset);
-              console.info('[LayerNameDebug] asset via getAsset', asset);
             } else if (editorRef.current.store) {
               const store = editorRef.current.store;
               if (store.get) {
@@ -483,7 +1401,6 @@ const OuzhiArtPlatform = () => {
                 asset = records.find(r => r.id === assetId);
               }
               logger.debug(`[图层创建] 通过 store 获取 asset:`, asset);
-              console.info('[LayerNameDebug] asset via store', asset);
             }
             
             if (asset) {
@@ -496,13 +1413,11 @@ const OuzhiArtPlatform = () => {
                 meta: asset.meta
               };
               logger.debug(`[图层创建] asset 完整结构:`, assetDebugInfo);
-              console.info('[LayerNameDebug] asset debug info', assetDebugInfo);
               
               // 优先使用 asset.props.name（tldraw 可能保存文件名）
               if (asset.props?.name) {
                 fileName = asset.props.name;
                 logger.debug(`[图层创建] 从 asset.props.name 获取文件名:`, fileName);
-                console.info('[LayerNameDebug] filename from asset.props.name', fileName);
                 // 保存到映射中，以便后续使用
                 assetFileNameMapRef.current.set(assetId, fileName);
               }
@@ -522,7 +1437,6 @@ const OuzhiArtPlatform = () => {
                   if (match) {
                     fileName = decodeURIComponent(match[1]);
                     logger.debug(`[图层创建] 匹配到文件名:`, fileName);
-                    console.info('[LayerNameDebug] filename from asset.props.src', fileName);
                     // 保存到映射中
                     assetFileNameMapRef.current.set(assetId, fileName);
                     break;
@@ -533,7 +1447,6 @@ const OuzhiArtPlatform = () => {
               if (!fileName && asset.meta?.name) {
                 fileName = asset.meta.name;
                 logger.debug(`[图层创建] 从 asset.meta.name 获取文件名:`, fileName);
-                console.info('[LayerNameDebug] filename from asset.meta.name', fileName);
                 // 保存到映射中
                 assetFileNameMapRef.current.set(assetId, fileName);
               }
@@ -592,17 +1505,14 @@ const OuzhiArtPlatform = () => {
         if (fileName && !/^\d+$/.test(fileName)) {
           layerName = getUniqueLayerName(fileName);
           logger.debug(`[图层创建] 使用提取的文件名:`, layerName);
-          console.info('[LayerNameDebug] final layer name from file', layerName);
         } else {
           layerName = '';
           logger.debug(`[图层创建] 文件名无效，使用默认命名`);
-          console.info('[LayerNameDebug] filename invalid, fallback to default');
         }
       } else {
         // 如果找不到文件名但有 assetId，延迟检查（asset 监听器可能稍后才保存映射）
         if (assetId) {
           logger.debug(`[图层创建] 未找到文件名，但有 assetId，延迟检查:`, assetId);
-          console.info('[LayerNameDebug] no filename but has assetId, will retry', assetId);
           // 延迟检查映射和 asset（asset 监听器可能在 shape 创建之后才触发）
           setTimeout(() => {
             let delayedFileName = null;
@@ -610,7 +1520,6 @@ const OuzhiArtPlatform = () => {
             // 再次检查映射
             if (assetFileNameMapRef.current.has(assetId)) {
               delayedFileName = assetFileNameMapRef.current.get(assetId);
-              console.info('[LayerNameDebug] delayed check: filename from map', delayedFileName);
             }
             
             // 如果映射中还没有，直接查询 asset
@@ -663,7 +1572,6 @@ const OuzhiArtPlatform = () => {
             if (delayedFileName && !/^\d+$/.test(delayedFileName)) {
               updateLayerNamesForAsset(assetId, delayedFileName);
             } else {
-              console.info('[LayerNameDebug] delayed check: no valid filename found', delayedFileName);
             }
           }, 500); // 延迟 500ms，等待 asset 监听器处理（同时上传多个文件时需要更长时间）
         }
@@ -671,7 +1579,6 @@ const OuzhiArtPlatform = () => {
         // 使用默认命名（addLayer 会自动处理递增编号）
         layerName = '';
         logger.debug(`[图层创建] 未提取到文件名，使用默认命名`);
-        console.info('[LayerNameDebug] no filename found, fallback to default');
       }
     } else {
       // 其他类型的图层，使用默认命名（addLayer 会自动处理递增编号）
@@ -698,12 +1605,10 @@ const OuzhiArtPlatform = () => {
       const layerIds = assetLayerMapRef.current.get(assetId) || [];
       if (!layerIds.includes(newLayer.id)) {
         assetLayerMapRef.current.set(assetId, [...layerIds, newLayer.id]);
-        console.info('[LayerNameDebug] 记录 asset 与图层映射', assetId, newLayer.id, 'total layers:', layerIds.length + 1);
       }
       // 如果已经拿到文件名，立刻尝试命名（延迟一点确保图层已创建）
       const knownName = assetFileNameMapRef.current.get(assetId);
       if (knownName) {
-        console.info('[LayerNameDebug] 图层创建后立即更新名称', assetId, knownName, newLayer.id);
         setTimeout(() => {
           updateLayerNamesForAsset(assetId, knownName);
         }, 50);
@@ -712,7 +1617,6 @@ const OuzhiArtPlatform = () => {
         setTimeout(() => {
           const delayedKnownName = assetFileNameMapRef.current.get(assetId);
           if (delayedKnownName) {
-            console.info('[LayerNameDebug] 延迟检查发现文件名，更新图层名称', assetId, delayedKnownName);
             updateLayerNamesForAsset(assetId, delayedKnownName);
           }
         }, 600);
@@ -734,9 +1638,6 @@ const OuzhiArtPlatform = () => {
       setSelectedLayerIds(new Set([newLayer.id]));
     }
   }, [addLayer, setActiveLayerId, renameLayer, getUniqueLayerName, updateLayerNamesForAsset]);
-  
-  // 存储编辑器实例的引用（需要在handleObjectModified之前定义）
-  const editorRef = useRef(null);
   
   // 用于防止循环更新的 ref
   const isSyncingZIndexRef = useRef(false);
@@ -826,10 +1727,9 @@ const OuzhiArtPlatform = () => {
   // 对象删除处理 - 同步删除对应的图层
   const handleObjectDeleted = useCallback((shapeId) => {
     logger.debug('Object deleted:', shapeId);
+    imageCropStateRef.current.delete(shapeId);
     
-    // 查找包含该shapeId的图层
     const layerToDelete = layers.find(layer => {
-      // 检查shapeIds或objects中是否包含该shapeId
       const hasInShapeIds = layer.shapeIds && layer.shapeIds.includes(shapeId);
       const hasInObjects = layer.objects && layer.objects.some(obj => obj.id === shapeId);
       return hasInShapeIds || hasInObjects;
@@ -839,13 +1739,17 @@ const OuzhiArtPlatform = () => {
       logger.debug('Deleting layer:', layerToDelete.id, 'for shape:', shapeId);
       deleteLayer(layerToDelete.id);
     } else {
-      logger.warn('No layer found for deleted shape:', shapeId);
+      // 可能是临时 shape（如多选框等），无需警告
+      logger.debug('Deleted shape not bound to any layer, ignoring:', shapeId);
     }
   }, [layers, deleteLayer]);
   
   // 生成器功能 - 运行应用
-  const handleGenerate = async (appId, uiInputs) => {
+  const handleGenerate = async (appId, uiInputs, pollTimeoutSeconds = 120) => {
     if (!appId || !uiInputs) return;
+    
+    // 每次开始新的生成前，先取消上一次的轮询，避免并发请求导致 429
+    cancelActivePoll();
     
     setIsGenerating(true);
     setGeneratedImages([]); // 清空之前的图片
@@ -861,24 +1765,68 @@ const OuzhiArtPlatform = () => {
       const promptId = result?.prompt_id || result?.promptId;
       
       if (promptId) {
+        const controller = { cancelled: false, promptId };
+        pollControllerRef.current = controller;
+        activePromptIdRef.current = promptId;
+        
         // 轮询获取结果
-        const pollResult = async () => {
-          const maxAttempts = 30; // 最多轮询30次
+        const pollResult = async (currentController) => {
           const basePollInterval = 2000; // 基础轮询间隔：2秒
+          // 根据用户配置的超时时间计算最大轮询次数
+          const maxAttempts = Math.floor(pollTimeoutSeconds / (basePollInterval / 1000)); // 转换为次数
           const serverErrorInterval = 5000; // 服务器错误时的轮询间隔：5秒
+          const rateLimitInterval = 10000; // 429速率限制时的轮询间隔：10秒
           const maxConsecutiveErrors = 5; // 最大连续错误次数
+          const maxConsecutiveRateLimits = 10; // 最大连续速率限制次数（429不算严重错误）
           
-          let consecutiveErrors = 0; // 连续错误计数
+          logger.info(`[轮询] 开始轮询，超时时间: ${pollTimeoutSeconds}秒，最大尝试次数: ${maxAttempts}`);
+          
+          const finalizePoll = () => {
+            if (activePromptIdRef.current === promptId) {
+              activePromptIdRef.current = null;
+            }
+            if (pollControllerRef.current === currentController) {
+              pollControllerRef.current = null;
+            }
+          };
+          
+          let consecutiveErrors = 0; // 连续错误计数（不包括429）
+          let consecutiveRateLimits = 0; // 连续速率限制计数
           let lastErrorStatus = null; // 最后一次错误的状态码
+          let currentPollInterval = basePollInterval; // 当前轮询间隔
           
           for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            if (currentController?.cancelled || activePromptIdRef.current !== promptId) {
+              logger.info(`[轮询] promptId ${promptId} 已被取消或被新任务替换，停止轮询`);
+              finalizePoll();
+              return;
+            }
+            
             try {
               // 根据错误情况调整轮询间隔
-              const pollInterval = (lastErrorStatus && [502, 503, 504].includes(lastErrorStatus)) 
-                ? serverErrorInterval 
-                : basePollInterval;
+              // 注意：429错误在catch块中已经等待，所以这里需要判断是否需要等待
+              let shouldWait = true;
               
-              await new Promise(resolve => setTimeout(resolve, pollInterval));
+              if (lastErrorStatus === 429) {
+                // 429错误已在catch块中等待，跳过本次等待
+                shouldWait = false;
+                lastErrorStatus = null; // 重置状态
+              } else if (lastErrorStatus && [502, 503, 504].includes(lastErrorStatus)) {
+                currentPollInterval = serverErrorInterval;
+              } else {
+                currentPollInterval = basePollInterval;
+              }
+              
+              // 只在需要时等待（429错误已在catch块中等待）
+              if (shouldWait && attempt > 0) {
+                await new Promise(resolve => setTimeout(resolve, currentPollInterval));
+              }
+              
+              // 每10次轮询显示一次进度提示
+              if (attempt > 0 && attempt % 10 === 0) {
+                const elapsedSeconds = Math.floor(attempt * basePollInterval / 1000);
+                logger.info(`[轮询] 已等待 ${elapsedSeconds} 秒，继续等待结果...`);
+              }
               
               logger.debug(`[轮询] 尝试 ${attempt + 1}/${maxAttempts}, promptId: ${promptId}`);
               const historyResponse = await api.get(`/comfy/history/${promptId}`, {
@@ -908,8 +1856,9 @@ const OuzhiArtPlatform = () => {
                 historyData = historyData.data;
               }
               
-              if (!historyData) {
-                logger.debug(`[轮询] 尝试 ${attempt + 1}: 无数据，继续轮询...`);
+              // 检查是否是空对象或无效数据
+              if (!historyData || (typeof historyData === 'object' && Object.keys(historyData).length === 0)) {
+                logger.debug(`[轮询] 尝试 ${attempt + 1}: 无数据或空响应，继续轮询...`);
                 continue;
               }
               
@@ -948,6 +1897,7 @@ const OuzhiArtPlatform = () => {
                       setIsGenerating(false);
                       setSelectedLayerIds(new Set());
                       // 注意：清空上传组件的值应该在 GeneratorPanel 中处理
+                      finalizePoll();
                       return; // 成功获取结果，停止轮询
                     }
                   }
@@ -999,6 +1949,7 @@ const OuzhiArtPlatform = () => {
                 // 这里只负责设置生成结果和停止轮询
                 // 注意：不在这里清除多选状态，因为图片添加是异步的
                 // 会在所有图片添加完成后的 useEffect 中处理
+                finalizePoll();
                 return; // 成功获取结果，停止轮询
               }
               
@@ -1007,17 +1958,46 @@ const OuzhiArtPlatform = () => {
               const status = error.response?.status;
               const isServerError = status && [502, 503, 504].includes(status);
               const isNotFound = status === 404;
+              const isRateLimit = status === 429;
               
-              consecutiveErrors++;
               lastErrorStatus = status;
               
               if (isNotFound) {
                 // 404 是正常的，说明任务还没完成，继续轮询
                 logger.debug(`[轮询] promptId ${promptId} 尚未存在，继续轮询...`);
                 consecutiveErrors = 0; // 404 不算错误
+                consecutiveRateLimits = 0; // 重置速率限制计数
+                continue;
+              } else if (isRateLimit) {
+                // 429 速率限制：增加延迟，使用指数退避
+                consecutiveRateLimits++;
+                consecutiveErrors = 0; // 429不算严重错误，重置错误计数
+                
+                const retryAfterHeader = Number(error.response?.headers?.['retry-after']);
+                const retryAfterMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0 
+                  ? retryAfterHeader * 1000 
+                  : null;
+                const backoffInterval = retryAfterMs 
+                  ?? Math.min(rateLimitInterval * Math.pow(1.5, consecutiveRateLimits - 1), 30000);
+                
+                logger.warn(
+                  `[轮询] 尝试 ${attempt + 1} 遇到速率限制 (429)，将在 ${Math.round(backoffInterval/1000)} 秒后重试... (连续 ${consecutiveRateLimits} 次)` +
+                  (retryAfterMs ? '（遵循 Retry-After）' : '')
+                );
+                
+                // 如果连续多次遇到速率限制，增加延迟但继续尝试
+                if (consecutiveRateLimits >= maxConsecutiveRateLimits) {
+                  logger.warn(`[轮询] 连续 ${consecutiveRateLimits} 次遇到速率限制，使用最大延迟 ${30000/1000} 秒`);
+                }
+                
+                // 等待更长时间后再继续
+                await new Promise(resolve => setTimeout(resolve, backoffInterval));
                 continue;
               } else if (isServerError) {
                 // 服务器错误（502/503/504），可能是服务器繁忙，增加延迟后继续
+                consecutiveErrors++;
+                consecutiveRateLimits = 0; // 重置速率限制计数
+                
                 logger.warn(`[轮询] 尝试 ${attempt + 1} 遇到服务器错误 ${status}，可能是服务器繁忙，将在 ${serverErrorInterval/1000} 秒后重试...`);
                 
                 // 如果连续多次遇到服务器错误，提前终止
@@ -1025,11 +2005,15 @@ const OuzhiArtPlatform = () => {
                   logger.error(`[轮询] 连续 ${consecutiveErrors} 次遇到服务器错误，提前终止轮询`);
                   setIsGenerating(false);
                   errorHandler.showWarning(`服务器繁忙（错误 ${status}），请稍后重试或查看历史记录`);
+                  finalizePoll();
                   return;
                 }
                 continue;
               } else {
                 // 其他错误
+                consecutiveErrors++;
+                consecutiveRateLimits = 0; // 重置速率限制计数
+                
                 logger.error(`[轮询] 尝试 ${attempt + 1} 失败:`, error);
                 
                 // 如果连续多次遇到错误，提前终止
@@ -1037,6 +2021,7 @@ const OuzhiArtPlatform = () => {
                   logger.error(`[轮询] 连续 ${consecutiveErrors} 次遇到错误，提前终止轮询`);
                   setIsGenerating(false);
                   errorHandler.showWarning('获取生成结果时遇到错误，请稍后查看历史记录');
+                  finalizePoll();
                   return;
                 }
                 continue;
@@ -1045,13 +2030,15 @@ const OuzhiArtPlatform = () => {
           }
           
           // 超时
-          logger.error(`[轮询] 超时：已尝试 ${maxAttempts} 次，仍未获取到结果`);
+          const totalWaitTime = Math.floor(maxAttempts * basePollInterval / 1000);
+          logger.error(`[轮询] 超时：已尝试 ${maxAttempts} 次（约 ${totalWaitTime} 秒），仍未获取到结果`);
           logger.error(`[轮询] promptId: ${promptId}`);
           setIsGenerating(false);
-          errorHandler.showWarning('获取生成结果超时，请稍后查看历史记录');
+          errorHandler.showWarning(`获取生成结果超时（已等待 ${totalWaitTime} 秒），任务可能仍在处理中，请稍后查看历史记录或刷新页面`);
+          finalizePoll();
         };
         
-        pollResult();
+        pollResult(controller);
       } else if (result && result.outputs) {
         // 如果有直接输出，立即使用
         const imageOutputs = [];
@@ -1084,47 +2071,6 @@ const OuzhiArtPlatform = () => {
     }
   };
   
-  // AI对话功能
-  const handleSendMessage = async (message = inputMessage) => {
-    if (!message.trim()) return;
-    
-    // 添加用户消息
-    const userMessage = { role: 'user', content: message };
-    setMessages(prev => [...prev, userMessage]);
-    setInputMessage('');
-    setIsSending(true);
-    
-    try {
-      // 模拟AI回复
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // 添加AI回复
-      const aiResponses = [
-        '这是一个很好的想法！我可以为你生成一些相关的视觉元素。',
-        '根据你的描述，我建议使用对比鲜明的色彩搭配来突出主题。',
-        '让我为你创建一个符合要求的设计方案。',
-        '这个设计方向很棒！我会为你提供几个不同的版本供选择。'
-      ];
-      const randomResponse = aiResponses[Math.floor(Math.random() * aiResponses.length)];
-      const aiMessage = { role: 'assistant', content: randomResponse };
-      setMessages(prev => [...prev, aiMessage]);
-    } catch (error) {
-      logger.error('发送消息失败:', error);
-    } finally {
-      setIsSending(false);
-    }
-  };
-  
-  const handleRefreshQuestions = () => {
-    const newQuestions = [
-      '如何设计吸引人的海报？',
-      'Logo设计有哪些原则？',
-      '配色方案推荐',
-      '字体选择建议'
-    ];
-    setQuickQuestions(newQuestions);
-  };
-  
   // 图层操作功能
   const handleLayerAdd = () => {
     const newLayer = addLayer();
@@ -1139,7 +2085,6 @@ const OuzhiArtPlatform = () => {
   const handleEditorReady = useCallback((editor) => {
     editorRef.current = editor;
     logger.debug('[主组件] Editor ready:', editor);
-    console.info('[LayerNameDebug] Editor ready, instance captured');
     setIsEditorInitialized(true);
   }, []);
   
@@ -1180,6 +2125,68 @@ const OuzhiArtPlatform = () => {
   
   const handleLayerToggleLock = (layerId) => {
     toggleLayerLock(layerId);
+  };
+
+  const handleLayerDuplicate = (layerId) => {
+    duplicateLayer(layerId);
+  };
+
+  const handleLayerMerge = (layerId) => {
+    // 合并图层到下一层
+    const layerIndex = layers.findIndex(l => l.id === layerId);
+    if (layerIndex >= 0 && layerIndex < layers.length - 1) {
+      const nextLayer = layers[layerIndex + 1];
+      mergeMultipleLayers([layerId, nextLayer.id]);
+    }
+  };
+
+  const handleLayerSplit = (layerId) => {
+    splitLayer(layerId);
+  };
+
+  const handleLayerClone = (layerId) => {
+    cloneLayer(layerId);
+  };
+
+  const handleLayerFuse = (layerIds) => {
+    fuseLayers(layerIds);
+  };
+
+  const handleLayerMergeDown = (layerId) => {
+    // 向下合并图层
+    const layerIndex = layers.findIndex(l => l.id === layerId);
+    if (layerIndex >= 0 && layerIndex < layers.length - 1) {
+      const nextLayer = layers[layerIndex + 1];
+      mergeMultipleLayers([layerId, nextLayer.id]);
+    }
+  };
+
+  const handleLayerDrop = (draggedLayerId, targetLayerId, position) => {
+    // 处理图层拖放重新排序
+    const draggedIndex = layers.findIndex(l => l.id === draggedLayerId);
+    const targetIndex = layers.findIndex(l => l.id === targetLayerId);
+    if (draggedIndex < 0 || targetIndex < 0) return;
+    
+    const newIndex = position === 'above' ? targetIndex : targetIndex + 1;
+    handleLayerReorder(draggedLayerId, newIndex);
+  };
+
+  const handleLayerGroupDrop = (layerId, groupId) => {
+    // 将图层拖放到组中
+    setLayers(prev => prev.map(layer => 
+      layer.id === layerId
+        ? { ...layer, parentId: groupId }
+        : layer
+    ));
+  };
+
+  const handleLayerToggleGroup = (layerId) => {
+    // 切换图层组的展开/折叠状态
+    setLayers(prev => prev.map(layer => 
+      layer.id === layerId && layer.isGroup
+        ? { ...layer, isExpanded: !layer.isExpanded }
+        : layer
+    ));
   };
   
   // 同步图层顺序到 tldraw 的 z-index
@@ -1224,6 +2231,33 @@ const OuzhiArtPlatform = () => {
   
   // 用于防止循环更新的 ref
   const isSelectingFromLayerRef = useRef(false);
+
+  const pruneLayerShapeReferences = useCallback(
+    (layerId, invalidShapeIds) => {
+      if (!invalidShapeIds || invalidShapeIds.length === 0) return;
+      setLayers((prevLayers) =>
+        prevLayers.map((layer) => {
+          if (layer.id !== layerId) return layer;
+          const nextShapeIds = (layer.shapeIds || []).filter(
+            (id) => !invalidShapeIds.includes(id)
+          );
+          const nextObjects = (layer.objects || []).filter(
+            (obj) => !invalidShapeIds.includes(obj.id)
+          );
+          const changed =
+            nextShapeIds.length !== (layer.shapeIds || []).length ||
+            nextObjects.length !== (layer.objects || []).length;
+          if (!changed) return layer;
+          return {
+            ...layer,
+            shapeIds: nextShapeIds,
+            objects: nextObjects
+          };
+        })
+      );
+    },
+    [setLayers]
+  );
   
   // 监听 activeLayerId 变化，自动选中图层对应的所有 shape
   useEffect(() => {
@@ -1254,7 +2288,8 @@ const OuzhiArtPlatform = () => {
         });
         
         if (invalidShapeIds.length > 0) {
-          logger.warn(`[图层选择] 有 ${invalidShapeIds.length} 个无效的 shapeId:`, invalidShapeIds);
+          logger.debug(`[图层选择] 移除 ${invalidShapeIds.length} 个已删除的 shapeId:`, invalidShapeIds);
+          pruneLayerShapeReferences(layer.id, invalidShapeIds);
         }
         
         if (validShapeIds.length > 0) {
@@ -1270,15 +2305,15 @@ const OuzhiArtPlatform = () => {
             isSelectingFromLayerRef.current = false;
           }, 200);
         } else {
-          logger.warn(`[图层选择] 图层 ${activeLayerId} 没有有效的 shape`);
+          logger.debug(`[图层选择] 图层 ${activeLayerId} 目前没有可选的 shape`);
         }
       } else {
-        logger.warn(`[图层选择] 图层 ${activeLayerId} 没有 shapeIds`);
+        logger.debug(`[图层选择] 图层 ${activeLayerId} 没有 shapeIds`);
       }
     } else {
-      logger.warn(`[图层选择] 图层不存在:`, activeLayerId);
+      logger.debug(`[图层选择] 图层不存在:`, activeLayerId);
     }
-  }, [activeLayerId, layers]);
+  }, [activeLayerId, layers, pruneLayerShapeReferences]);
   
   // 监听 asset 创建，保存文件名映射
   useEffect(() => {
@@ -1319,22 +2354,14 @@ const OuzhiArtPlatform = () => {
                 fileName = fileName.split('?')[0].split('#')[0];
                 assetFileNameMapRef.current.set(assetId, fileName);
                 logger.debug(`[Asset监听] 保存文件名映射: ${assetId} -> ${fileName}`);
-                console.info('[LayerNameDebug] asset filename mapped', assetId, fileName);
                 
                 // 检查是否有对应的图层需要更新名称
                 if (fileName && !/^\d+$/.test(fileName)) {
                   const currentLayers = layersRef.current || [];
-                  console.info('[LayerNameDebug] asset listener: checking layers', {
-                    assetId,
-                    fileName,
-                    layersCount: currentLayers.length,
-                    layers: currentLayers.map(l => ({ id: l.id, name: l.name, shapeIdsCount: l.shapeIds?.length || 0 }))
-                  });
                   
                   // 查找包含该 assetId 的图层
                   const targetLayer = currentLayers.find(layer => {
                     if (!layer.shapeIds || layer.shapeIds.length === 0) {
-                      console.info('[LayerNameDebug] asset listener: layer has no shapeIds', layer.id);
                       return false;
                     }
                     // 检查该图层的 shape 是否使用这个 assetId
@@ -1345,50 +2372,28 @@ const OuzhiArtPlatform = () => {
                         const shapeAssetId = shape?.props?.assetId;
                         const matches = shapeAssetId === assetId;
                         if (matches) {
-                          console.info('[LayerNameDebug] asset listener: found matching shape', {
-                            layerId: layer.id,
-                            layerName: layer.name,
-                            shapeId,
-                            shapeAssetId,
-                            assetId
-                          });
                         }
                         return matches;
                       } catch (error) {
-                        console.info('[LayerNameDebug] asset listener: error getting shape', shapeId, error);
                         return false;
                       }
                     });
                     return found;
                   });
                   
-                  console.info('[LayerNameDebug] asset listener: targetLayer found', targetLayer ? {
-                    id: targetLayer.id,
-                    name: targetLayer.name,
-                    shapeIds: targetLayer.shapeIds
-                  } : null);
                   
                   if (targetLayer) {
                     // 如果图层名称还是默认的"图层 X"格式（包括 "图层 X (N)" 格式），更新为文件名
                     const isDefaultName = /^图层 \d+/.test(targetLayer.name);
-                    console.info('[LayerNameDebug] asset listener: checking default name', {
-                      layerName: targetLayer.name,
-                      isDefaultName,
-                      pattern: /^图层 \d+/.test(targetLayer.name)
-                    });
                     // 强制更新：如果图层名称是默认格式，或者图层名称与文件名不同，都更新
                     if (isDefaultName || targetLayer.name !== fileName) {
                       logger.debug(`[Asset监听] 更新图层名称: ${targetLayer.id} (${targetLayer.name}) -> ${fileName}`);
-                      console.info('[LayerNameDebug] asset listener: update layer name', targetLayer.id, targetLayer.name, '->', fileName);
                       renameLayer(targetLayer.id, fileName);
                     } else {
-                      console.info('[LayerNameDebug] asset listener: layer name already matches filename, skip update', targetLayer.name);
                     }
                   } else {
-                    console.info('[LayerNameDebug] asset listener: no target layer found for assetId', assetId);
                     // 如果没找到图层，可能是图层还没创建，延迟再试一次
                     setTimeout(() => {
-                      console.info('[LayerNameDebug] asset listener: retry updateLayerNamesForAsset', assetId, fileName);
                       updateLayerNamesForAsset(assetId, fileName);
                     }, 500);
                   }
@@ -1760,6 +2765,708 @@ const OuzhiArtPlatform = () => {
   const handleLayerGroupRename = (groupId, newName) => {
     renameLayerGroup(groupId, newName);
   };
+
+  const autoExtendCrop = useCallback(async (shapeId, extend) => {
+    if (!editorRef.current) return;
+    const editor = editorRef.current;
+    const shape = editor.getShape(shapeId);
+    if (!shape || shape.type !== 'image') return;
+
+    const assetId = shape.props?.assetId;
+    if (!assetId) return;
+    const asset = editor.getAsset(assetId);
+    if (!asset || asset.type !== 'image') return;
+
+    try {
+      let cropState = imageCropStateRef.current.get(shapeId);
+      const baseSrc = cropState?.originalSrc || asset.props?.src;
+      const mimeType = cropState?.mimeType || asset.props?.mimeType || 'image/png';
+      if (!baseSrc) {
+        logger.warn('[自动扩展] 缺少原始图像数据');
+        return;
+      }
+
+      if (!cropState) {
+        const baseImage = await loadImageElement(baseSrc);
+        cropState = {
+          originalSrc: baseSrc,
+          mimeType,
+          originalWidth: asset.props?.w || baseImage.width,
+          originalHeight: asset.props?.h || baseImage.height,
+          crop: { left: 0, right: 0, top: 0, bottom: 0 },
+          padding: { left: 0, right: 0, top: 0, bottom: 0 }
+        };
+        imageCropStateRef.current.set(shapeId, cropState);
+      }
+
+      let baseImageElement = cropState.baseImageElement;
+      if (!baseImageElement) {
+        baseImageElement = await loadImageElement(cropState.originalSrc);
+        cropState.baseImageElement = baseImageElement;
+      }
+      const baseWidth = cropState.originalWidth || baseImageElement.width;
+      const baseHeight = cropState.originalHeight || baseImageElement.height;
+      if (!baseWidth || !baseHeight) return;
+
+      const prevCrop = { ...cropState.crop };
+      const prevPadding = { ...cropState.padding };
+      const prevVisibleWidthPx = baseWidth - prevCrop.left - prevCrop.right;
+      const prevVisibleHeightPx = baseHeight - prevCrop.top - prevCrop.bottom;
+      const prevTotalWidthPx = prevVisibleWidthPx + prevPadding.left + prevPadding.right;
+      const prevTotalHeightPx = prevVisibleHeightPx + prevPadding.top + prevPadding.bottom;
+      if (prevTotalWidthPx <= 0 || prevTotalHeightPx <= 0) return;
+
+      const pxPerCanvasX = prevTotalWidthPx / Math.max(shape.props.w || 1, 1e-6);
+      const pxPerCanvasY = prevTotalHeightPx / Math.max(shape.props.h || 1, 1e-6);
+      const unitPerPxX = pxPerCanvasX !== 0 ? 1 / pxPerCanvasX : 0;
+      const unitPerPxY = pxPerCanvasY !== 0 ? 1 / pxPerCanvasY : 0;
+      const minVisibleWidthPx = MIN_RESIZE_SIZE * pxPerCanvasX;
+      const minVisibleHeightPx = MIN_RESIZE_SIZE * pxPerCanvasY;
+
+      const extendValues = {
+        left: clampResizeDeltaValue(extend?.left || 0, shape.props.w),
+        right: clampResizeDeltaValue(extend?.right || 0, shape.props.w),
+        top: clampResizeDeltaValue(extend?.top || 0, shape.props.h),
+        bottom: clampResizeDeltaValue(extend?.bottom || 0, shape.props.h)
+      };
+
+      const extendPixels = {
+        left: Math.round(extendValues.left * pxPerCanvasX),
+        right: Math.round(extendValues.right * pxPerCanvasX),
+        top: Math.round(extendValues.top * pxPerCanvasY),
+        bottom: Math.round(extendValues.bottom * pxPerCanvasY)
+      };
+
+      const adjustSide = (side) => {
+        const deltaPx = extendPixels[side];
+        if (deltaPx === 0) return;
+        const isHorizontal = side === 'left' || side === 'right';
+        const crop = cropState.crop;
+        const padding = cropState.padding;
+
+        if (deltaPx > 0) {
+          let remaining = deltaPx;
+          if (crop[side] > 0) {
+            const restore = Math.min(remaining, crop[side]);
+            crop[side] -= restore;
+            remaining -= restore;
+          }
+          if (remaining > 0) {
+            padding[side] += remaining;
+          }
+        } else {
+          let shrinkAmount = Math.abs(deltaPx);
+          if (padding[side] > 0) {
+            const reducePad = Math.min(shrinkAmount, padding[side]);
+            padding[side] -= reducePad;
+            shrinkAmount -= reducePad;
+          }
+          if (shrinkAmount > 0) {
+            if (isHorizontal) {
+              const visibleWidth = baseWidth - crop.left - crop.right;
+              const maxAdditionalCrop = Math.max(0, visibleWidth - minVisibleWidthPx);
+              const applied = Math.min(shrinkAmount, maxAdditionalCrop);
+              crop[side] += applied;
+            } else {
+              const visibleHeight = baseHeight - crop.top - crop.bottom;
+              const maxAdditionalCrop = Math.max(0, visibleHeight - minVisibleHeightPx);
+              const applied = Math.min(shrinkAmount, maxAdditionalCrop);
+              crop[side] += applied;
+            }
+          }
+        }
+      };
+
+      ['left', 'right', 'top', 'bottom'].forEach(adjustSide);
+
+      const nextVisibleWidthPx = baseWidth - cropState.crop.left - cropState.crop.right;
+      const nextVisibleHeightPx = baseHeight - cropState.crop.top - cropState.crop.bottom;
+      const nextTotalWidthPx = nextVisibleWidthPx + cropState.padding.left + cropState.padding.right;
+      const nextTotalHeightPx = nextVisibleHeightPx + cropState.padding.top + cropState.padding.bottom;
+      if (nextTotalWidthPx <= 0 || nextTotalHeightPx <= 0) {
+        logger.warn('[自动扩展] 计算后的尺寸无效');
+        return;
+      }
+
+      const deltaLeftPx =
+        (cropState.padding.left - prevPadding.left) - (cropState.crop.left - prevCrop.left);
+      const deltaRightPx =
+        (cropState.padding.right - prevPadding.right) - (cropState.crop.right - prevCrop.right);
+      const deltaTopPx =
+        (cropState.padding.top - prevPadding.top) - (cropState.crop.top - prevCrop.top);
+      const deltaBottomPx =
+        (cropState.padding.bottom - prevPadding.bottom) - (cropState.crop.bottom - prevCrop.bottom);
+
+      const deltaLeftCanvas = deltaLeftPx * unitPerPxX;
+      const deltaRightCanvas = deltaRightPx * unitPerPxX;
+      const deltaTopCanvas = deltaTopPx * unitPerPxY;
+      const deltaBottomCanvas = deltaBottomPx * unitPerPxY;
+
+      const newShapeWidth = Math.max(
+        MIN_RESIZE_SIZE,
+        shape.props.w + deltaLeftCanvas + deltaRightCanvas
+      );
+      const newShapeHeight = Math.max(
+        MIN_RESIZE_SIZE,
+        shape.props.h + deltaTopCanvas + deltaBottomCanvas
+      );
+      const newShapeX = shape.x - deltaLeftCanvas;
+      const newShapeY = shape.y - deltaTopCanvas;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(nextTotalWidthPx));
+      canvas.height = Math.max(1, Math.round(nextTotalHeightPx));
+      const ctx = canvas.getContext('2d');
+
+      if (cropFillMode === 'transparent') {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      ctx.drawImage(
+        baseImageElement,
+        cropState.crop.left,
+        cropState.crop.top,
+        nextVisibleWidthPx,
+        nextVisibleHeightPx,
+        cropState.padding.left,
+        cropState.padding.top,
+        nextVisibleWidthPx,
+        nextVisibleHeightPx
+      );
+
+      const dataUrl = canvas.toDataURL(cropState.mimeType || mimeType);
+      const newAssetId = createAssetId();
+
+      editor.createAssets([
+        {
+          id: newAssetId,
+          typeName: 'asset',
+          type: 'image',
+          props: {
+            ...asset.props,
+            w: canvas.width,
+            h: canvas.height,
+            src: dataUrl,
+            mimeType: cropState.mimeType || mimeType
+          },
+          meta: asset.meta || {}
+        }
+      ]);
+
+      editor.markHistoryStoppingPoint('auto-extend-crop');
+      editor.updateShapes([
+        {
+          ...shape,
+          x: newShapeX,
+          y: newShapeY,
+          props: {
+            ...shape.props,
+            w: newShapeWidth,
+            h: newShapeHeight,
+            assetId: newAssetId
+          }
+        }
+      ]);
+
+      setLayers(prev =>
+        prev.map(layer => {
+          const shapeIds = getLayerShapeIds(layer);
+          if (!shapeIds.includes(shapeId)) return layer;
+          return {
+            ...layer,
+            objects: (layer.objects || []).map(obj =>
+              obj.id === shapeId
+                ? {
+                    ...obj,
+                    data: {
+                      ...obj.data,
+                      props: {
+                        ...(obj.data?.props || {}),
+                        w: newShapeWidth,
+                        h: newShapeHeight,
+                        assetId: newAssetId
+                      }
+                    }
+                  }
+                : obj
+            )
+          };
+        })
+      );
+
+      const targetLayer = layersRef.current?.find(layer => getLayerShapeIds(layer).includes(shapeId));
+      if (targetLayer) {
+        const targetMask = masks.find(mask => mask.layerId === targetLayer.id);
+        if (targetMask) {
+          const bounds = targetMask.bounds || { x: 0, y: 0, width: 0, height: 0 };
+          updateMask(targetMask.id, {
+            bounds: {
+              ...bounds,
+              x: (bounds.x || 0) + deltaLeftCanvas,
+              y: (bounds.y || 0) + deltaTopCanvas,
+              width: (bounds.width || 0) + deltaLeftCanvas + deltaRightCanvas,
+              height: (bounds.height || 0) + deltaTopCanvas + deltaBottomCanvas
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to extend image bounds:', error);
+    }
+  }, [cropFillMode, editorRef, getLayerShapeIds, masks, setLayers, updateMask]);
+
+  const startSelectionSession = useCallback((toolType, options = {}) => {
+    if (!editorRef.current) return false;
+    const editor = editorRef.current;
+    const targetLayerId = options.layerId || activeLayerId;
+    if (!targetLayerId) {
+      logger.warn('未指定可用的图层来创建选区');
+      return false;
+    }
+    const targetLayer = layers.find(layer => layer.id === targetLayerId);
+    if (!targetLayer) {
+      logger.warn('未找到可用的图层来创建选区');
+      return false;
+    }
+    const layerShapeIds = getLayerShapeIds(targetLayer);
+    const shapeId = options.shapeId && layerShapeIds.includes(options.shapeId)
+      ? options.shapeId
+      : layerShapeIds[0];
+    if (!shapeId) {
+      logger.warn('当前图层没有可用的图像形状');
+      return false;
+    }
+    const shape = editor.getShape(shapeId);
+    if (!shape || shape.type !== 'image') {
+      logger.warn('当前仅支持对图像图层进行选区操作');
+      return false;
+    }
+    const bounds = editor.getShapePageBounds(shapeId);
+    if (!bounds) return false;
+    setSelectionAction(options.applyMode || null);
+    setSelectionSession({
+      tool: toolType,
+      layerId: targetLayer.id,
+      shapeId,
+      pageBounds: bounds,
+      points: [],
+      status: 'drawing'
+    });
+    return true;
+  }, [activeLayerId, editorRef, getLayerShapeIds, layers]);
+
+  const handleStartSmearErase = useCallback(() => {
+    if (!selectedImageInfo) {
+      errorHandler.showWarning('请先选中一张图片再使用涂抹工具');
+      return;
+    }
+    const layerId = getLayerIdByShapeId(selectedImageInfo.shapeId);
+    const success = startSelectionSession('brush', {
+      applyMode: null, // 不再自动应用，由用户选择
+      layerId,
+      shapeId: selectedImageInfo.shapeId
+    });
+    if (!success) {
+      errorHandler.showWarning('无法进入涂抹模式，请确认图层可编辑');
+    }
+  }, [selectedImageInfo, getLayerIdByShapeId, startSelectionSession]);
+
+  // applySelectionCrop 需要在 handleSmearApply 之前定义
+  const applySelectionCrop = useCallback(async (mode, sessionOverride = null) => {
+    const session = sessionOverride || selectionSession;
+    if (!session || session.points.length < 2 || !editorRef.current) return;
+    const editor = editorRef.current;
+    const shape = editor.getShape(session.shapeId);
+    if (!shape || shape.type !== 'image') return;
+    const assetId = shape.props?.assetId;
+    if (!assetId) return;
+    const asset = editor.getAsset(assetId);
+    if (!asset || asset.type !== 'image' || !asset.props?.src) return;
+
+    try {
+      const imageElement = await loadImageElement(asset.props.src);
+      const originalWidth = asset.props?.w || imageElement.width;
+      const originalHeight = asset.props?.h || imageElement.height;
+
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = originalWidth;
+      maskCanvas.height = originalHeight;
+      const maskCtx = maskCanvas.getContext('2d');
+      maskCtx.fillStyle = '#ffffff';
+      maskCtx.strokeStyle = '#ffffff';
+      maskCtx.lineCap = 'round';
+      maskCtx.lineJoin = 'round';
+
+      if (session.tool === 'brush') {
+        const brushPx = Math.max(
+          2,
+          (brushSize || 1) * (originalWidth / (session.pageBounds.width || session.pageBounds.w || 1))
+        );
+        maskCtx.lineWidth = brushPx;
+        maskCtx.beginPath();
+        session.points.forEach((point, index) => {
+          const px = point.x * originalWidth;
+          const py = point.y * originalHeight;
+          if (index === 0) {
+            maskCtx.moveTo(px, py);
+          } else {
+            maskCtx.lineTo(px, py);
+          }
+        });
+        maskCtx.stroke();
+      } else {
+        maskCtx.beginPath();
+        session.points.forEach((point, index) => {
+          const px = point.x * originalWidth;
+          const py = point.y * originalHeight;
+          if (index === 0) {
+            maskCtx.moveTo(px, py);
+          } else {
+            maskCtx.lineTo(px, py);
+          }
+        });
+        maskCtx.closePath();
+        maskCtx.fill();
+      }
+
+      const resultCanvas = document.createElement('canvas');
+      resultCanvas.width = originalWidth;
+      resultCanvas.height = originalHeight;
+      const resultCtx = resultCanvas.getContext('2d');
+      resultCtx.drawImage(imageElement, 0, 0);
+      resultCtx.globalCompositeOperation = mode === 'crop' ? 'destination-in' : 'destination-out';
+      resultCtx.drawImage(maskCanvas, 0, 0);
+
+      const mimeType = asset.props?.mimeType || 'image/png';
+      const dataUrl = resultCanvas.toDataURL(mimeType);
+      const newAssetId = createAssetId();
+
+      editor.createAssets([
+        {
+          id: newAssetId,
+          typeName: 'asset',
+          type: 'image',
+          props: {
+            ...asset.props,
+            w: originalWidth,
+            h: originalHeight,
+            src: dataUrl,
+            mimeType
+          },
+          meta: asset.meta || {}
+        }
+      ]);
+
+      editor.markHistoryStoppingPoint(mode === 'crop' ? 'selection-crop' : 'selection-inverse-crop');
+      editor.updateShapes([
+        {
+          ...shape,
+          props: {
+            ...shape.props,
+            assetId: newAssetId
+          }
+        }
+      ]);
+
+      setLayers(prev =>
+        prev.map(layer => {
+          const shapeIds = getLayerShapeIds(layer);
+          if (!shapeIds.includes(session.shapeId)) return layer;
+          return {
+            ...layer,
+            objects: (layer.objects || []).map(obj =>
+              obj.id === session.shapeId
+                ? {
+                    ...obj,
+                    data: {
+                      ...obj.data,
+                      props: {
+                        ...(obj.data?.props || {}),
+                        assetId: newAssetId
+                      }
+                    }
+                  }
+                : obj
+            )
+          };
+        })
+      );
+
+      createMaskForLayer(session.layerId, {
+        type: `selection-${session.tool}`,
+        data: session.points,
+        inverted: mode === 'inverse',
+        bounds: {
+          x: session.pageBounds.minX,
+          y: session.pageBounds.minY,
+          width: session.pageBounds.width ?? session.pageBounds.w ?? 0,
+          height: session.pageBounds.height ?? session.pageBounds.h ?? 0
+        }
+      });
+
+      setSelectionSession(null);
+    } catch (error) {
+      console.error('Failed to apply selection crop:', error);
+    }
+  }, [brushSize, createMaskForLayer, editorRef, getLayerShapeIds, selectionSession, setLayers]);
+
+  // 处理涂抹应用（支持实时预览图像）
+  const handleSmearApply = useCallback(async (mode, customBrushSize, previewDataUrl, maskDataUrl) => {
+    if (!selectionSession) return;
+    
+    const editor = editorRef.current;
+    if (!editor) return;
+    
+    const shape = editor.getShape(selectionSession.shapeId);
+    if (!shape || shape.type !== 'image') return;
+    
+    // 如果是保存为 mask 模式
+    if (mode === 'save-mask' && maskDataUrl) {
+      try {
+        const layerId = getLayerIdByShapeId(selectionSession.shapeId);
+        const layer = layers.find(l => l.id === layerId);
+        
+        if (layer) {
+          // 使用 createMaskForLayer 创建蒙版
+          createMaskForLayer(layerId, {
+            type: 'smear-brush',
+            data: selectionSession.points || [],
+            maskImage: maskDataUrl,
+            bounds: {
+              x: selectionSession.pageBounds.minX,
+              y: selectionSession.pageBounds.minY,
+              width: selectionSession.pageBounds.width ?? selectionSession.pageBounds.w ?? 0,
+              height: selectionSession.pageBounds.height ?? selectionSession.pageBounds.h ?? 0
+            }
+          });
+          
+          // 重要：保存历史记录，使蒙版操作可撤销
+          saveLayerHistory(layers, layerGroups, masks);
+          
+          errorHandler.showSuccess('蒙版已保存到图层');
+        }
+        
+        setSelectionSession(null);
+        setSelectionAction(null);
+        return;
+      } catch (error) {
+        console.error('保存蒙版失败:', error);
+        errorHandler.showError('保存蒙版失败');
+        return;
+      }
+    }
+    
+    // 如果有预览图像（应用擦除/保留），直接使用
+    if (previewDataUrl) {
+      try {
+        const newAssetId = createAssetId();
+        const asset = editor.getAsset(shape.props.assetId);
+        
+        editor.createAssets([{
+          id: newAssetId,
+          typeName: 'asset',
+          type: 'image',
+          props: {
+            ...asset.props,
+            src: previewDataUrl,
+            mimeType: 'image/png'
+          },
+          meta: asset.meta || {}
+        }]);
+        
+        editor.updateShapes([{
+          ...shape,
+          props: {
+            ...shape.props,
+            assetId: newAssetId
+          }
+        }]);
+        
+        setSelectionSession(null);
+        setSelectionAction(null);
+        errorHandler.showSuccess('涂抹已应用');
+        return;
+      } catch (error) {
+        console.error('应用涂抹失败:', error);
+        errorHandler.showError('应用涂抹失败');
+        return;
+      }
+    }
+    
+    // 原有逻辑（兼容旧的非实时模式）
+    if (!selectionSession.status || selectionSession.status !== 'ready') return;
+
+    if (mode === 'save-mask') {
+      // 保存为蒙版图层
+      try {
+        const session = selectionSession;
+        const editor = editorRef.current;
+        const shape = editor.getShape(session.shapeId);
+        if (!shape || shape.type !== 'image') return;
+        
+        const assetId = shape.props?.assetId;
+        if (!assetId) return;
+        
+        const asset = editor.getAsset(assetId);
+        if (!asset || asset.type !== 'image' || !asset.props?.src) return;
+
+        const imageElement = await loadImageElement(asset.props.src);
+        const originalWidth = asset.props?.w || imageElement.width;
+        const originalHeight = asset.props?.h || imageElement.height;
+
+        // 创建蒙版画布
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = originalWidth;
+        maskCanvas.height = originalHeight;
+        const maskCtx = maskCanvas.getContext('2d');
+        maskCtx.fillStyle = '#ffffff';
+        maskCtx.strokeStyle = '#ffffff';
+        maskCtx.lineCap = 'round';
+        maskCtx.lineJoin = 'round';
+
+        const brushPx = Math.max(
+          2,
+          (customBrushSize || brushSize) * (originalWidth / (session.pageBounds.width || 1))
+        );
+        maskCtx.lineWidth = brushPx;
+        maskCtx.beginPath();
+        session.points.forEach((point, index) => {
+          const px = point.x * originalWidth;
+          const py = point.y * originalHeight;
+          if (index === 0) {
+            maskCtx.moveTo(px, py);
+          } else {
+            maskCtx.lineTo(px, py);
+          }
+        });
+        maskCtx.stroke();
+
+        // 将蒙版保存为新图层
+        const maskDataUrl = maskCanvas.toDataURL('image/png');
+        const layerId = getLayerIdByShapeId(session.shapeId);
+        const layer = layers.find(l => l.id === layerId);
+        
+        if (layer) {
+          // 使用 createMaskForLayer 创建蒙版
+          createMaskForLayer(layerId, {
+            type: 'smear-brush',
+            data: session.points,
+            maskImage: maskDataUrl,
+            bounds: {
+              x: session.pageBounds.minX,
+              y: session.pageBounds.minY,
+              width: session.pageBounds.width ?? session.pageBounds.w ?? 0,
+              height: session.pageBounds.height ?? session.pageBounds.h ?? 0
+            }
+          });
+          
+          // 重要：保存历史记录，使蒙版操作可撤销
+          saveLayerHistory(layers, layerGroups, masks);
+          
+          errorHandler.showSuccess('蒙版已保存到图层');
+        }
+        
+        setSelectionSession(null);
+        setSelectionAction(null);
+      } catch (error) {
+        console.error('保存蒙版失败:', error);
+        errorHandler.showError('保存蒙版失败');
+      }
+    } else {
+      // 应用擦除/反向擦除
+      const applyMode = mode === 'erase' ? 'inverse' : 'crop';
+      
+      // 临时更新 brushSize 用于应用
+      const oldBrushSize = brushSize;
+      setBrushSize(customBrushSize || brushSize);
+      
+      await applySelectionCrop(applyMode, selectionSession);
+      
+      // 恢复原来的 brushSize
+      setBrushSize(oldBrushSize);
+      
+      setSelectionSession(null);
+      setSelectionAction(null);
+    }
+  }, [selectionSession, brushSize, applySelectionCrop, editorRef, getLayerIdByShapeId, layers, createMaskForLayer]);
+
+  // 处理涂抹取消（保留 mask）
+  const handleSmearCancel = useCallback(async () => {
+    // 如果有 session 并且状态是 ready（已绘制完成），保存 mask
+    if (selectionSession && selectionSession.status === 'ready' && selectionSession.maskDataUrl) {
+      try {
+        const layerId = getLayerIdByShapeId(selectionSession.shapeId);
+        const layer = layers.find(l => l.id === layerId);
+        
+        if (layer) {
+          // 使用 createMaskForLayer 创建蒙版
+          createMaskForLayer(layerId, {
+            type: 'smear-brush',
+            data: selectionSession.points || [],
+            maskImage: selectionSession.maskDataUrl,
+            bounds: {
+              x: selectionSession.pageBounds.minX,
+              y: selectionSession.pageBounds.minY,
+              width: selectionSession.pageBounds.width ?? selectionSession.pageBounds.w ?? 0,
+              height: selectionSession.pageBounds.height ?? selectionSession.pageBounds.h ?? 0
+            }
+          });
+          
+          errorHandler.showSuccess('蒙版已保存');
+        }
+      } catch (error) {
+        console.error('保存蒙版失败:', error);
+      }
+    }
+    
+    // 清除 session，退出涂抹模式
+    setSelectionSession(null);
+    setSelectionAction(null);
+  }, [selectionSession, getLayerIdByShapeId, layers, createMaskForLayer]);
+
+  useEffect(() => {
+    if (!selectionSession || selectionSession.status !== 'ready' || !selectionAction) return;
+    (async () => {
+      await applySelectionCrop(selectionAction, selectionSession);
+      setSelectionAction(null);
+    })();
+  }, [selectionAction, applySelectionCrop, selectionSession]);
+
+  useEffect(() => {
+    if (!selectionSession && selectionAction) {
+      setSelectionAction(null);
+    }
+  }, [selectionAction, selectionSession]);
+
+  const handleDownloadSelectedImage = useCallback(() => {
+    if (!editorRef.current || !selectedImageInfo) {
+      errorHandler.showWarning('请选择要下载的图片');
+      return;
+    }
+    const editor = editorRef.current;
+    const shape = editor.getShape(selectedImageInfo.shapeId);
+    if (!shape || shape.type !== 'image') {
+      errorHandler.showWarning('当前选择不是图片');
+      return;
+    }
+    const assetId = shape.props?.assetId;
+    const asset = assetId ? editor.getAsset(assetId) : null;
+    if (!asset || !asset.props?.src) {
+      errorHandler.showWarning('未找到图片资源');
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = asset.props.src;
+    const mappedName = assetFileNameMapRef.current.get(asset.id);
+    const fileName = mappedName || asset.props.name || `${shape.id}.png`;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [selectedImageInfo]);
   
   // 系统功能
   const handleOpenMember = () => {
@@ -1791,7 +3498,11 @@ const OuzhiArtPlatform = () => {
         {/* 画布区域 */}
         <div className="flex-1 flex flex-col">
           {/* tldraw画布 */}
-          <div className="flex-1 relative bg-gray-200 overflow-hidden" style={{ zIndex: 1 }}>
+          <div
+            ref={containerRef}
+            className="flex-1 relative bg-gray-200 overflow-hidden"
+            style={{ zIndex: 1 }}
+          >
             <Tldraw>
               <EditableCanvas 
                 activeTool={activeTool}
@@ -1805,49 +3516,79 @@ const OuzhiArtPlatform = () => {
                 generatedImages={generatedImages}
               />
             </Tldraw>
+            {selectionScreenBounds && !selectionSession && (
+              <>
+                <ImageExtendOverlay
+                  containerRef={containerRef}
+                  editorRef={editorRef}
+                  selectionBounds={selectionScreenBounds}
+                  onCommit={autoExtendCrop}
+                  highlight={extendHighlight}
+                />
+                <ImageActionBar
+                  selectionBounds={selectionScreenBounds}
+                  fillMode={cropFillMode}
+                  onFillModeChange={setCropFillMode}
+                  onStartSmear={handleStartSmearErase}
+                  onDownload={handleDownloadSelectedImage}
+                  onExtendHint={triggerExtendHighlight}
+                />
+              </>
+            )}
+            {selectionSession && (
+              <SelectionOverlay
+                containerRef={containerRef}
+                editorRef={editorRef}
+                session={selectionSession}
+                setSession={setSelectionSession}
+                viewportRevision={viewportRevision}
+                onApply={handleSmearApply}
+                onCancel={handleSmearCancel}
+              />
+            )}
           </div>
         </div>
         
-        {/* 图层管理面板 */}
-        <div className="relative z-[100]">
+        {/* 右侧图层面板 */}
+        <div className={clsx(
+          "h-full border-l bg-white flex flex-col relative z-[100] transition-all duration-300",
+          isLayerPanelCollapsed ? "w-12" : "w-[360px]"
+        )}>
           <LayerPanel
             layers={layers}
             activeLayerId={activeLayerId}
             selectedLayerIds={selectedLayerIds}
-            layerGroups={layerGroups}
-            onLayerSelect={handleLayerSelectWithSync}
-            onLayerAdd={handleLayerAdd}
-            onLayerDelete={handleLayerDelete}
-            onLayerToggleVisibility={toggleLayerVisibility}
+            setSelectedLayerIds={setSelectedLayerIds}
+            onLayerSelect={layerId => handleLayerSelectWithSync(layerId, { multi: false })}
+            onLayerToggleVisibility={handleLayerToggleVisibility}
             onLayerToggleLock={handleLayerToggleLock}
             onLayerRename={handleLayerRename}
-            onLayerReorder={handleLayerReorder}
+            onLayerDelete={handleLayerDelete}
+            onLayerAdd={handleLayerAdd}
+            onLayerDuplicate={handleLayerDuplicate}
+            onLayerMerge={handleLayerMerge}
+            onLayerSplit={handleLayerSplit}
+            onLayerClone={handleLayerClone}
+            onLayerFuse={handleLayerFuse}
             onLayerSetOpacity={handleLayerSetOpacity}
             onLayerSetBlendMode={handleLayerSetBlendMode}
+            layerGroups={layerGroups}
+            onLayerReorder={handleLayerReorder}
             onLayerGroupCreate={handleLayerGroupCreate}
             onLayerGroupDelete={handleLayerGroupDelete}
             onLayerGroupRename={handleLayerGroupRename}
+            onLayerDrop={handleLayerDrop}
+            onLayerGroupDrop={handleLayerGroupDrop}
+            onLayerToggleGroup={handleLayerToggleGroup}
+            onLayerMergeDown={handleLayerMergeDown}
+            onLayerMergeSelected={handleMergeSelectedLayers}
             onGroupSelectedLayers={handleGroupSelectedLayers}
-            onMergeSelectedLayers={handleMergeSelectedLayers}
             onClearSelection={handleClearSelection}
             isCollapsed={isLayerPanelCollapsed}
             onToggleCollapse={() => setIsLayerPanelCollapsed(!isLayerPanelCollapsed)}
             editorRef={editorRef}
           />
         </div>
-        
-        {/* AI设计师对话面板 */}
-        <AIDesignerPanel
-          messages={messages}
-          inputMessage={inputMessage}
-          setInputMessage={setInputMessage}
-          onSendMessage={handleSendMessage}
-          quickQuestions={quickQuestions}
-          onRefreshQuestions={handleRefreshQuestions}
-          isSending={isSending}
-          isCollapsed={isRightPanelCollapsed}
-          onToggleCollapse={() => setIsRightPanelCollapsed(!isRightPanelCollapsed)}
-        />
       </div>
     </div>
   );

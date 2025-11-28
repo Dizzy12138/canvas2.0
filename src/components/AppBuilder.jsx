@@ -162,6 +162,24 @@ const AppBuilder = () => {
     navigate(newPath);
   };
 
+  // 跳转到指定步骤
+  const goToStep = (targetStep) => {
+    if (targetStep < 1 || targetStep > steps.length) return;
+    if (targetStep === currentStep) return;
+    
+    setCurrentStep(targetStep);
+    let newPath = `/app-builder/${targetStep}`;
+    
+    // 根据目标步骤和当前状态构建 URL
+    if (targetStep === 2 && workflowId) {
+      newPath += `?workflowId=${workflowId}`;
+    } else if (appId && targetStep > 1) {
+      newPath += `?appId=${appId}`;
+    }
+    
+    navigate(newPath);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* 顶部导航栏 */}
@@ -202,16 +220,27 @@ const AppBuilder = () => {
                       : 'text-gray-500 dark:text-gray-400'
                   }`}
                 >
-                  <div className={`
-                    flex items-center justify-center w-8 h-8 rounded-full border-2
-                    ${index <= currentStep 
-                      ? 'border-blue-600 bg-blue-600 text-white' 
-                      : 'border-gray-300 bg-white'
-                    }
-                  `}>
+                  <button
+                    onClick={() => goToStep(index + 1)}
+                    className={`
+                      flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all
+                      ${index <= currentStep 
+                        ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700 hover:border-blue-700' 
+                        : 'border-gray-300 bg-white hover:border-gray-400 hover:bg-gray-50'
+                      }
+                      cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+                    `}
+                    title={`跳转到步骤 ${index + 1}: ${step.title}`}
+                  >
                     {index + 1}
-                  </div>
-                  <span className="ml-2 text-sm font-medium">{step.title}</span>
+                  </button>
+                  <button
+                    onClick={() => goToStep(index + 1)}
+                    className="ml-2 text-sm font-medium hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded px-1"
+                    title={`跳转到步骤 ${index + 1}: ${step.title}`}
+                  >
+                    {step.title}
+                  </button>
                 </div>
                 {index < steps.length - 1 && (
                   <div className="flex-auto mx-2 h-1 bg-gray-200 rounded-lg dark:bg-gray-700"></div>
@@ -223,7 +252,7 @@ const AppBuilder = () => {
         
         {/* 内容区域 */}
         <div className="bg-white shadow rounded-lg p-6">
-          <div className="min-h-[500px]">
+          <div className={currentStep === 4 ? "h-[calc(100vh-280px)]" : "min-h-[500px]"}>
             {steps[currentStep - 1]?.content}
           </div>
           

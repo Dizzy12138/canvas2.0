@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
-import { Tldraw, useEditor, useValue } from 'tldraw';
+import clsx from 'clsx';
+import { Tldraw, useEditor } from 'tldraw';
 // 注意：我们不直接导入CSS文件，而是通过Vite处理
 import Toolbar from './Toolbar';
 import EnhancedLayerPanel from './EnhancedLayerPanel';
@@ -10,12 +11,25 @@ import VisualWorkflowEditor from './VisualWorkflowEditor';
 import MaskManager from './MaskManager';
 import AlignAssistSystem from './AlignAssistSystem';
 import LayerDiffViewer from './LayerDiffViewer';
+import LayerPanel from './LayerPanel';
+import EditableCanvas from './canvas/EditableCanvas.jsx';
+import GeneratorPanel from './panels/GeneratorPanel.jsx';
+import api from '@/api/index.js';
 import { useEnhancedLayers } from '../hooks/useEnhancedLayers';
 import { useLayerHistory } from '../hooks/useLayerHistory';
-import { createAssetId } from '@tldraw/tlschema';
+import logger from '../utils/logger.js';
+import errorHandler from '../utils/errorHandler.js';
 
 const arraysEqual = (a = [], b = []) =>
   a.length === b.length && a.every((value, index) => value === b[index]);
+
+const areSetsEqual = (setA = new Set(), setB = new Set()) => {
+  if (setA.size !== setB.size) return false;
+  for (const value of setA) {
+    if (!setB.has(value)) return false;
+  }
+  return true;
+};
 
 const loadImageElement = (src) =>
   new Promise((resolve, reject) => {
@@ -45,83 +59,69 @@ const isPointInsideBounds = (point, bounds) =>
   point.y >= bounds.minY &&
   point.y <= bounds.maxY;
 
-// 自定义工具组件，用于与tldraw集成
-const TldrawCustomTools = ({ 
-  activeTool, 
-  setActiveTool,
-  strokeColor,
-  setStrokeColor,
-  fillColor,
-  setFillColor,
-  brushSize,
-  setBrushSize,
-  opacity,
-  setOpacity,
-  onObjectAdded,
-  onObjectModified,
-  onObjectDeleted
-}) => {
+const createAssetId = () => {
+  const uuid =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : Math.random().toString(36).slice(2, 10);
+  return `asset:${uuid}`;
+};
+
+const createPlaceholderImageDataUrl = (prompt = '', width = 512, height = 512) => {
+  if (typeof document === 'undefined') {
+    return '';
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = '#475569';
+  ctx.font = 'bold 20px system-ui, sans-serif';
+  ctx.fillText(prompt?.slice(0, 32) || 'AI Image', 24, 40);
+  ctx.strokeStyle = '#cbd5f5';
+  ctx.strokeRect(12, 12, width - 24, height - 24);
+  return canvas.toDataURL('image/png');
+};
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const extractImagesFromOutputs = (outputs = {}) => {
+  const images = [];
+  Object.values(outputs).forEach(output => {
+    if (!output || typeof output !== 'object') return;
+    if (Array.isArray(output.images)) {
+      images.push(...output.images);
+    }
+    Object.values(output).forEach(value => {
+      if (value && typeof value === 'object' && Array.isArray(value.images)) {
+        images.push(...value.images);
+      }
+    });
+  });
+  return images;
+};
+
+// 自定义工具组件，仅负责同步当前工具到 tldraw
+const TldrawCustomTools = ({ activeTool }) => {
   const editor = useEditor();
-  
-  // 监听选中形状的变化
-  const selectedShapes = useValue('selected shapes', () => editor.getSelectedShapes(), [editor]);
-  
-  // 当选中形状变化时触发回调
-  useEffect(() => {
-    if (selectedShapes.length > 0) {
-      // 触发对象修改回调
-      onObjectModified?.(selectedShapes);
-    }
-  }, [selectedShapes, onObjectModified]);
-  
-  // 设置当前工具
-  useEffect(() => {
-    if (editor) {
-      // 将我们的工具映射到tldraw工具
-      const toolMap = {
-        'select': 'select',
-        'brush': 'draw',
-        'pencil': 'draw',
-        'eraser': 'erase',
-        'rectangle': 'rectangle',
-        'circle': 'ellipse',
-        'line': 'line',
-        'text': 'text'
-      };
-      
-      const tldrawTool = toolMap[activeTool] || 'select';
-      editor.setCurrentTool(tldrawTool);
-    }
-  }, [activeTool, editor]);
-  
-  // 监听形状创建事件
+
   useEffect(() => {
     if (!editor) return;
-    
-    const unsubscribe = editor.store.listen((changes) => {
-      const mutation = changes.changes || {};
-      const added = mutation.added || {};
-      const removed = mutation.removed || {};
+    const toolMap = {
+      select: 'select',
+      brush: 'draw',
+      pencil: 'draw',
+      eraser: 'erase',
+      rectangle: 'rectangle',
+      circle: 'ellipse',
+      line: 'line',
+      text: 'text'
+    };
+    editor.setCurrentTool(toolMap[activeTool] || 'select');
+  }, [activeTool, editor]);
 
-      Object.values(added).forEach((record) => {
-        if (record.typeName === 'shape') {
-          onObjectAdded?.(record);
-        }
-      });
-
-      Object.values(removed).forEach((record) => {
-        if (record.typeName === 'shape') {
-          const shapeId = record.id || (typeof record === 'string' ? record : null);
-          if (shapeId) {
-            onObjectDeleted?.(shapeId);
-          }
-        }
-      });
-    });
-    
-    return () => unsubscribe();
-  }, [editor, onObjectAdded, onObjectDeleted]);
-  
   return null;
 };
 
@@ -265,7 +265,7 @@ const ImageExtendOverlay = ({
   ];
 
   return (
-    <div className="absolute inset-0 pointer-events-none select-none">
+    <div className="absolute inset-0 pointer-events-none select-none z-[1000]">
       <div
         className="absolute border-2 border-blue-400 bg-blue-200/10 pointer-events-none rounded"
         style={{
@@ -278,10 +278,10 @@ const ImageExtendOverlay = ({
       {handles.map(handle => (
         <div
           key={handle.key}
-          className="absolute bg-white border border-blue-500 rounded pointer-events-auto"
+          className="absolute bg-blue-500 border-2 border-white rounded-full pointer-events-auto hover:scale-125 transition-transform"
           style={{
-            width: handleSize,
-            height: handleSize,
+            width: 14,
+            height: 14,
             ...handle.style,
             cursor: handle.cursor
           }}
@@ -458,6 +458,11 @@ const TldrawCanvas = () => {
   const [workflowParams, setWorkflowParams] = useState({});
   const [selectedWorkflowData, setSelectedWorkflowData] = useState(null);
   const [diffView, setDiffView] = useState(null);
+  const [generatedImages, setGeneratedImages] = useState([]);
+  const [isGeneratorCollapsed, setIsGeneratorCollapsed] = useState(false);
+  const [showBasicLayerPanel, setShowBasicLayerPanel] = useState(false);
+  const [isLayerPanelCollapsed, setIsLayerPanelCollapsed] = useState(false);
+  const [selectedLayerIds, setSelectedLayerIds] = useState(() => new Set());
   
   // 辅助系统默认设置
   const [assistSettings, setAssistSettings] = useState({
@@ -521,6 +526,8 @@ const TldrawCanvas = () => {
   const [isEditorReady, setIsEditorReady] = useState(false);
   const layersRef = useRef(layers);
   const layerOrderGuardsRef = useRef({ fromUi: false, fromEditor: false });
+  const selectedLayerIdsRef = useRef(selectedLayerIds);
+  const isSelectingFromLayerRef = useRef(false);
   const [selectedImageInfo, setSelectedImageInfo] = useState(null);
   const [viewportRevision, setViewportRevision] = useState(0);
   const [cropFillMode, setCropFillMode] = useState('white');
@@ -529,6 +536,11 @@ const TldrawCanvas = () => {
   useEffect(() => {
     layersRef.current = layers;
   }, [layers]);
+
+  useEffect(() => {
+    selectedLayerIdsRef.current = selectedLayerIds;
+  }, [selectedLayerIds]);
+
 
   useEffect(() => {
     if (!isEditorReady || !editorRef.current) return;
@@ -595,6 +607,42 @@ const TldrawCanvas = () => {
   const selectionState = selectionSession
     ? { status: selectionSession.status, tool: selectionSession.tool }
     : null;
+
+  const pollComfyHistory = useCallback(async (promptId) => {
+    const maxAttempts = 30;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await sleep(2000);
+      try {
+        const response = await api.get(`/comfy/history/${promptId}`, {
+          headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
+        });
+        const promptData = response.data?.data?.[promptId];
+        if (!promptData) {
+          continue;
+        }
+        const outputs = promptData.outputs || promptData.output;
+        const images = extractImagesFromOutputs(outputs);
+        if (images.length > 0) {
+          return images;
+        }
+        if (Array.isArray(promptData.images) && promptData.images.length > 0) {
+          return promptData.images;
+        }
+        if (promptData.status === 'failed') {
+          throw new Error(promptData.error || '生成失败');
+        }
+      } catch (error) {
+        const status = error.response?.status;
+        if (status === 404) {
+          continue;
+        }
+        if (attempt === maxAttempts - 1) {
+          throw error;
+        }
+      }
+    }
+    throw new Error('获取生成结果超时，请稍后重试');
+  }, []);
   
   // 保存历史记录
   useEffect(() => {
@@ -616,6 +664,108 @@ const TldrawCanvas = () => {
     }
     return [];
   }, []);
+
+  useEffect(() => {
+    if (!isEditorReady || !editorRef.current) return;
+    const editor = editorRef.current;
+    const unsubscribe = editor.store.listen(() => {
+      if (isSelectingFromLayerRef.current) return;
+      const selectedShapeIds = editor.getSelectedShapeIds();
+      if (!selectedShapeIds || selectedShapeIds.length === 0) {
+        if (selectedLayerIdsRef.current.size > 0) {
+          setSelectedLayerIds(new Set());
+        }
+        return;
+      }
+
+      const currentLayers = layersRef.current || [];
+      const matchingLayerIds = new Set();
+      selectedShapeIds.forEach(shapeId => {
+        const layer = currentLayers.find(layer =>
+          getLayerShapeIds(layer).includes(shapeId)
+        );
+        if (layer) {
+          matchingLayerIds.add(layer.id);
+        }
+      });
+
+      if (matchingLayerIds.size === 0) return;
+      if (!areSetsEqual(selectedLayerIdsRef.current, matchingLayerIds)) {
+        setSelectedLayerIds(matchingLayerIds);
+      }
+      const [firstMatch] = matchingLayerIds;
+      if (firstMatch && firstMatch !== activeLayerId) {
+        setActiveLayerId(firstMatch);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [activeLayerId, getLayerShapeIds, isEditorReady, setActiveLayerId]);
+
+  const clearEditorSelection = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (typeof editor.selectNone === 'function') {
+      editor.selectNone();
+    } else if (typeof editor.deselectAll === 'function') {
+      editor.deselectAll();
+    } else if (typeof editor.select === 'function') {
+      editor.select();
+    }
+  }, [editorRef]);
+
+  const syncEditorSelectionToLayers = useCallback((layerIdSet) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const shapeIds = [];
+    const currentLayers = layersRef.current || [];
+    currentLayers.forEach(layer => {
+      if (layerIdSet.has(layer.id)) {
+        shapeIds.push(...getLayerShapeIds(layer));
+      }
+    });
+
+    isSelectingFromLayerRef.current = true;
+    if (shapeIds.length > 0) {
+      if (typeof editor.select === 'function') {
+        editor.select(...shapeIds);
+      } else if (typeof editor.setSelectedIds === 'function') {
+        editor.setSelectedIds(shapeIds);
+      }
+    } else {
+      clearEditorSelection();
+    }
+    requestAnimationFrame(() => {
+      isSelectingFromLayerRef.current = false;
+    });
+  }, [clearEditorSelection, getLayerShapeIds]);
+
+  useEffect(() => {
+    if (!layers || layers.length === 0) {
+      if (selectedLayerIdsRef.current.size > 0) {
+        const emptySet = new Set();
+        setSelectedLayerIds(emptySet);
+        syncEditorSelectionToLayers(emptySet);
+      }
+      return;
+    }
+    const validIds = new Set(layers.map(layer => layer.id));
+    const hasInvalid = Array.from(selectedLayerIdsRef.current).some(id => !validIds.has(id));
+    if (hasInvalid) {
+      const filtered = new Set(
+        Array.from(selectedLayerIdsRef.current).filter(id => validIds.has(id))
+      );
+      setSelectedLayerIds(filtered);
+      syncEditorSelectionToLayers(filtered);
+    }
+  }, [layers, syncEditorSelectionToLayers]);
+
+  useEffect(() => {
+    if (!activeLayerId || selectedLayerIdsRef.current.size > 0) return;
+    const nextSet = new Set([activeLayerId]);
+    setSelectedLayerIds(nextSet);
+    syncEditorSelectionToLayers(nextSet);
+  }, [activeLayerId, syncEditorSelectionToLayers]);
 
   const handleObjectAdded = useCallback((shape) => {
     if (!shape || !shape.id) return;
@@ -1132,12 +1282,24 @@ const TldrawCanvas = () => {
     }
   };
   
-  const handleLayerDelete = (layerId) => {
+  const handleLayerDelete = useCallback((layerId) => {
     deleteLayer(layerId);
-  };
+    if (!selectedLayerIdsRef.current.has(layerId)) return;
+    const nextSet = new Set(selectedLayerIdsRef.current);
+    nextSet.delete(layerId);
+    setSelectedLayerIds(nextSet);
+    const ordered = Array.from(nextSet);
+    const nextActive = ordered.length > 0 ? ordered[ordered.length - 1] : null;
+    setActiveLayerId(nextActive || null);
+    syncEditorSelectionToLayers(nextSet);
+  }, [deleteLayer, setActiveLayerId, syncEditorSelectionToLayers]);
   
   const handleLayerAdd = () => {
     const newLayer = addLayer();
+    const nextSet = new Set([newLayer.id]);
+    setSelectedLayerIds(nextSet);
+    setActiveLayerId(newLayer.id);
+    syncEditorSelectionToLayers(nextSet);
     console.log('New layer added:', newLayer);
   };
   
@@ -1157,6 +1319,56 @@ const TldrawCanvas = () => {
       layerOrderGuardsRef.current.fromUi = false;
     });
   }, [moveLayerShapesInEditor, reorderLayer]);
+
+  const handleLayerSelectWithSync = useCallback((layerId, event) => {
+    const isMultiSelect = event?.ctrlKey || event?.metaKey || event?.shiftKey;
+    const nextSet = isMultiSelect ? new Set(selectedLayerIdsRef.current) : new Set();
+
+    if (isMultiSelect) {
+      if (nextSet.has(layerId)) {
+        nextSet.delete(layerId);
+      } else {
+        nextSet.add(layerId);
+      }
+    } else {
+      nextSet.add(layerId);
+    }
+
+    setSelectedLayerIds(nextSet);
+    const ordered = Array.from(nextSet);
+    const nextActive = ordered.length > 0 ? ordered[ordered.length - 1] : null;
+    if (nextActive !== activeLayerId) {
+      setActiveLayerId(nextActive || null);
+    }
+    syncEditorSelectionToLayers(nextSet);
+  }, [activeLayerId, setActiveLayerId, syncEditorSelectionToLayers]);
+
+  const handleGroupSelectedLayers = useCallback(() => {
+    const currentSelection = selectedLayerIdsRef.current;
+    if (currentSelection.size < 2) return;
+    createLayerGroup(`图层组 ${layerGroups.length + 1}`, Array.from(currentSelection));
+    const emptySet = new Set();
+    setSelectedLayerIds(emptySet);
+    syncEditorSelectionToLayers(emptySet);
+  }, [createLayerGroup, layerGroups.length, syncEditorSelectionToLayers]);
+
+  const handleMergeSelectedLayers = useCallback(() => {
+    const selectedIds = Array.from(selectedLayerIdsRef.current);
+    if (selectedIds.length < 2) return;
+    const [targetLayerId, ...sourceLayerIds] = selectedIds;
+    mergeMultipleLayers(targetLayerId, sourceLayerIds);
+    const nextSet = new Set([targetLayerId]);
+    setSelectedLayerIds(nextSet);
+    setActiveLayerId(targetLayerId);
+    syncEditorSelectionToLayers(nextSet);
+  }, [mergeMultipleLayers, setActiveLayerId, syncEditorSelectionToLayers]);
+
+  const handleClearSelection = useCallback(() => {
+    const emptySet = new Set();
+    setSelectedLayerIds(emptySet);
+    setActiveLayerId(null);
+    syncEditorSelectionToLayers(emptySet);
+  }, [setActiveLayerId, syncEditorSelectionToLayers]);
 
   const handleSelectionCrop = useCallback(() => {
     applySelectionCrop('crop');
@@ -1239,17 +1451,80 @@ const TldrawCanvas = () => {
   };
   
   // AI 生成处理
-  const handleAIGenerate = async (request) => {
+  const handleAIGenerate = async ({ request, preferEndpointId } = {}) => {
     setIsGenerating(true);
+    const jobId = `job-${Date.now()}`;
+    setJobs(prev => [...prev, { jobId, status: 'processing', progress: 10, endpoint: preferEndpointId }]);
     try {
-      console.log('AI 生成请求:', request);
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const width = request?.settings?.width || 512;
+      const height = request?.settings?.height || 512;
+      const dataUrl = createPlaceholderImageDataUrl(request?.prompt, width, height);
+      setGeneratedImages(prev => [...prev, { id: `image-${jobId}`, url: dataUrl, prompt: request?.prompt }]);
+      setJobs(prev =>
+        prev.map(job =>
+          job.jobId === jobId ? { ...job, status: 'done', progress: 100 } : job
+        )
+      );
     } catch (error) {
       console.error('AI 生成失败:', error);
+      setJobs(prev =>
+        prev.map(job =>
+          job.jobId === jobId ? { ...job, status: 'failed', progress: 100 } : job
+        )
+      );
     } finally {
       setIsGenerating(false);
     }
   };
+
+  const handleGeneratorGenerate = useCallback(async (appId, uiInputs) => {
+    if (!appId || !uiInputs) return;
+
+    setIsGenerating(true);
+    setGeneratedImages([]);
+    const jobId = `workflow-${Date.now()}`;
+    setJobs(prev => [...prev, { jobId, status: 'running', progress: 10 }]);
+
+    try {
+      const response = await api.post(`/comfy/apps/${appId}/run`, { uiInputs });
+      const data = response.data?.data || {};
+      const promptId = data.prompt_id || data.promptId;
+      let images = [];
+
+      if (promptId) {
+        setJobs(prev =>
+          prev.map(job =>
+            job.jobId === jobId ? { ...job, status: 'waiting', progress: 30 } : job
+          )
+        );
+        images = await pollComfyHistory(promptId);
+      } else if (data.outputs) {
+        images = extractImagesFromOutputs(data.outputs);
+      }
+
+      if (!images || images.length === 0) {
+        throw new Error('生成结果为空，请稍后重试');
+      }
+
+      setGeneratedImages(images);
+      setJobs(prev =>
+        prev.map(job =>
+          job.jobId === jobId ? { ...job, status: 'done', progress: 100 } : job
+        )
+      );
+    } catch (error) {
+      const message = errorHandler.handleError(error, 'GeneratorPanel');
+      errorHandler.showError(message, error);
+      setJobs(prev =>
+        prev.map(job =>
+          job.jobId === jobId ? { ...job, status: 'failed', progress: 100 } : job
+        )
+      );
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [pollComfyHistory]);
   
   // 图层组重命名处理
   const handleLayerGroupRename = (groupId, newName) => {
@@ -1317,71 +1592,94 @@ const TldrawCanvas = () => {
   };
   
   return (
-    <div className="w-full h-screen bg-gray-50 flex">
-      <Toolbar
-        activeTool={activeTool}
-        onToolChange={handleToolChange}
-        onAction={handleAction}
-        className="w-16 h-full border-r"
+    <div className="w-full h-screen flex overflow-hidden bg-gray-50">
+      <GeneratorPanel
+        onGenerate={handleGeneratorGenerate}
+        isGenerating={isGenerating}
+        isCollapsed={isGeneratorCollapsed}
+        onToggleCollapse={() => setIsGeneratorCollapsed(prev => !prev)}
+        layers={layers}
+        editorRef={editorRef}
       />
-      
-      <div className="flex-1 flex">
-        <div ref={containerRef} className="flex-1 relative overflow-hidden">
-          <div style={{ position: 'absolute', inset: 0 }}>
-            <Tldraw onMount={handleEditorMount}>
-              <TldrawCustomTools
-                activeTool={activeTool}
-                setActiveTool={setActiveTool}
-                strokeColor={strokeColor}
-                setStrokeColor={setStrokeColor}
-                fillColor={fillColor}
-                setFillColor={setFillColor}
-                brushSize={brushSize}
-                setBrushSize={setBrushSize}
-                opacity={opacity}
-                setOpacity={setOpacity}
-                onObjectAdded={handleObjectAdded}
-                onObjectModified={handleObjectModified}
-                onObjectDeleted={handleObjectDeleted}
-              />
-            </Tldraw>
-          </div>
-          {selectionScreenBounds && !selectionSession && (
-            <ImageExtendOverlay
-              containerRef={containerRef}
-              editorRef={editorRef}
-              selectionBounds={selectionScreenBounds}
-              onCommit={autoExtendCrop}
-              fillMode={cropFillMode}
-              onFillModeChange={setCropFillMode}
-            />
-          )}
-          {selectionSession && (
-            <SelectionOverlay
-              containerRef={containerRef}
-              editorRef={editorRef}
-              session={selectionSession}
-              setSession={setSelectionSession}
-              viewportRevision={viewportRevision}
-            />
-          )}
-          {jobs.length > 0 && (
-            <div className="panel p-3 absolute top-4 right-4">
-              <div className="text-xs text-gray-500 mb-1">任务</div>
-              <ul className="space-y-1 max-h-24 overflow-auto">
-                {jobs.map(j => (
-                  <li key={j.jobId} className="text-xs text-gray-600">{j.jobId.slice(0,8)} · {j.status} · {j.progress ?? 0}%</li>
-                ))}
-              </ul>
-            </div>
-          )}
+      <div className="flex-1 flex overflow-hidden">
+        <div className="w-16 h-full border-r bg-white">
+          <Toolbar
+            activeTool={activeTool}
+            onToolChange={handleToolChange}
+            onAction={handleAction}
+            className="w-full h-full"
+          />
         </div>
-        
-        <div className="w-80 h-full border-l bg-white overflow-y-auto">
-          <div className="space-y-4 p-4">
+
+        <div className="flex-1 flex overflow-hidden">
+          <div ref={containerRef} className="flex-1 relative overflow-hidden">
+            <div style={{ position: 'absolute', inset: 0 }}>
+              <Tldraw onMount={handleEditorMount}>
+                <EditableCanvas
+                  activeTool={activeTool}
+                  onToolChange={setActiveTool}
+                  onObjectAdded={handleObjectAdded}
+                  onObjectModified={handleObjectModified}
+                  onObjectDeleted={handleObjectDeleted}
+                  layers={layers}
+                  toggleLayerVisibility={toggleLayerVisibility}
+                  onEditorReady={handleEditorMount}
+                  generatedImages={generatedImages}
+                />
+                <TldrawCustomTools activeTool={activeTool} />
+              </Tldraw>
+            </div>
+            {selectionScreenBounds && !selectionSession && (
+              <ImageExtendOverlay
+                containerRef={containerRef}
+                editorRef={editorRef}
+                selectionBounds={selectionScreenBounds}
+                onCommit={autoExtendCrop}
+                fillMode={cropFillMode}
+                onFillModeChange={setCropFillMode}
+              />
+            )}
+            {selectionSession && (
+              <SelectionOverlay
+                containerRef={containerRef}
+                editorRef={editorRef}
+                session={selectionSession}
+                setSession={setSelectionSession}
+                viewportRevision={viewportRevision}
+              />
+            )}
+            {jobs.length > 0 && (
+              <div className="panel p-3 absolute top-4 right-4">
+                <div className="text-xs text-gray-500 mb-1">任务</div>
+                <ul className="space-y-1 max-h-24 overflow-auto">
+                  {jobs.map(j => (
+                    <li key={j.jobId} className="text-xs text-gray-600">
+                      {j.jobId.slice(0, 8)} · {j.status} · {j.progress ?? 0}%
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <div className="w-80 h-full border-l bg-white overflow-y-auto">
+            <div className="space-y-4 p-4">
             <div className="flex items-center justify-between">
               <div className="text-sm font-medium text-gray-900">配置</div>
-              <button onClick={() => setShowServiceManager(true)} className="text-xs underline">AI 服务设置</button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowMaskPanel(prev => !prev)}
+                  className="text-xs underline"
+                >
+                  {showMaskPanel ? '隐藏蒙版面板' : '打开蒙版面板'}
+                </button>
+                <button onClick={() => setShowServiceManager(true)} className="text-xs underline">
+                  AI 服务设置
+                </button>
+                <button onClick={() => setShowBasicLayerPanel(true)} className="text-xs underline">
+                  基础图层面板
+                </button>
+              </div>
             </div>
             
             {showAssistPanel && (
@@ -1491,7 +1789,55 @@ const TldrawCanvas = () => {
             )}
           </div>
         </div>
+        </div>
       </div>
+      {showBasicLayerPanel && (
+        <div
+          className="fixed inset-0 z-[1200] bg-black/40 flex justify-end"
+          onClick={() => setShowBasicLayerPanel(false)}
+        >
+          <div
+            className="h-full w-[360px] bg-white border-l shadow-xl flex flex-col"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-2 border-b">
+              <div className="text-sm font-medium text-gray-900">基础图层面板</div>
+              <button
+                className="text-xs text-gray-500 hover:text-gray-700"
+                onClick={() => setShowBasicLayerPanel(false)}
+              >
+                关闭
+              </button>
+            </div>
+            <div className="flex-1">
+              <LayerPanel
+                layers={layers}
+                activeLayerId={activeLayerId}
+                selectedLayerIds={selectedLayerIds}
+                layerGroups={layerGroups}
+                onLayerSelect={handleLayerSelectWithSync}
+                onLayerAdd={handleLayerAdd}
+                onLayerDelete={handleLayerDelete}
+                onLayerToggleVisibility={toggleLayerVisibility}
+                onLayerToggleLock={handleLayerToggleLock}
+                onLayerRename={handleLayerRename}
+                onLayerReorder={handleLayerReorder}
+                onLayerSetOpacity={setLayerOpacity}
+                onLayerSetBlendMode={setLayerBlendMode}
+                onLayerGroupCreate={createLayerGroup}
+                onLayerGroupDelete={deleteLayerGroup}
+                onLayerGroupRename={handleLayerGroupRename}
+                onGroupSelectedLayers={handleGroupSelectedLayers}
+                onMergeSelectedLayers={handleMergeSelectedLayers}
+                onClearSelection={handleClearSelection}
+                isCollapsed={isLayerPanelCollapsed}
+                onToggleCollapse={() => setIsLayerPanelCollapsed(prev => !prev)}
+                editorRef={editorRef}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -151,6 +151,22 @@ const EditableCanvas = ({
             
             logger.info(`[画布] 成功添加图片 ${index + 1} 到画布位置 (${targetX}, ${targetY})，创建了 ${newShapes.length} 个shape`);
             
+            // 选中新添加的图片
+            if (newShapes.length > 0) {
+              // 选中最后一个图片（通常只有一个）
+              const lastShape = newShapes[newShapes.length - 1];
+              editor.select(lastShape.id);
+              
+              // 确保图片在视口中可见
+              const bounds = editor.getShapePageBounds(lastShape.id);
+              if (bounds) {
+                editor.zoomToBounds(bounds, { 
+                  animation: { duration: 300 },
+                  inset: 100 
+                });
+              }
+            }
+            
             // 将新添加的shape同步到图层系统
             if (newShapes.length > 0 && onObjectAdded) {
               newShapes.forEach(shape => {
@@ -189,6 +205,18 @@ const EditableCanvas = ({
               });
               
               logger.info(`[画布] 使用备选方案添加图片: ${imageId}`);
+              
+              // 选中新添加的图片
+              editor.select(imageId);
+              
+              // 确保图片在视口中可见
+              const bounds = editor.getShapePageBounds(imageId);
+              if (bounds) {
+                editor.zoomToBounds(bounds, { 
+                  animation: { duration: 300 },
+                  inset: 100 
+                });
+              }
               
               // 同步到图层系统
               if (onObjectAdded) {

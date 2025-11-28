@@ -85,6 +85,38 @@ const COMPONENT_TYPES = {
   }
 };
 
+const COMPONENT_PROPERTY_CONFIG = {
+  slider: [
+    { key: 'min', label: '最小值', type: 'number', placeholder: '如 0', defaultValue: 0 },
+    { key: 'max', label: '最大值', type: 'number', placeholder: '如 100', defaultValue: 100 },
+    { key: 'step', label: '步长', type: 'number', placeholder: '如 1', defaultValue: 1 }
+  ],
+  number: [
+    { key: 'min', label: '最小值', type: 'number', placeholder: '最小值', defaultValue: 0 },
+    { key: 'max', label: '最大值', type: 'number', placeholder: '最大值', defaultValue: 1000 },
+    { key: 'step', label: '步长', type: 'number', placeholder: '步长', defaultValue: 1 }
+  ],
+  width: [
+    { key: 'min', label: '最小值', type: 'number', placeholder: '尺寸下限', defaultValue: 64 },
+    { key: 'max', label: '最大值', type: 'number', placeholder: '尺寸上限', defaultValue: 2048 },
+    { key: 'step', label: '步长', type: 'number', placeholder: '步长', defaultValue: 64 }
+  ],
+  height: [
+    { key: 'min', label: '最小值', type: 'number', placeholder: '尺寸下限', defaultValue: 64 },
+    { key: 'max', label: '最大值', type: 'number', placeholder: '尺寸上限', defaultValue: 2048 },
+    { key: 'step', label: '步长', type: 'number', placeholder: '步长', defaultValue: 64 }
+  ],
+  dropdown_text: [
+    { key: 'options', label: '选项列表', type: 'options', valueType: 'text' }
+  ],
+  dropdown_number: [
+    { key: 'options', label: '选项列表', type: 'options', valueType: 'number' }
+  ],
+  dropdown: [
+    { key: 'options', label: '选项列表', type: 'options', valueType: 'text' }
+  ]
+};
+
 // 组件渲染器
 const ComponentRenderer = ({ 
   component, 
@@ -177,7 +209,7 @@ const ComponentRenderer = ({
             <label className="block text-sm font-medium text-gray-700">{label}</label>
             {/* 拖拽区域 */}
             <div
-              className="border-2 border-dashed border-gray-300 rounded-lg p-4 transition-colors text-center hover:border-gray-400 cursor-pointer bg-gray-50"
+              className="border-2 border-dashed border-gray-300 rounded-lg p-4 transition-colors text-center bg-gray-50"
             >
               <input
                 type="file"
@@ -218,6 +250,8 @@ const ComponentRenderer = ({
       }
       
       case 'dropdown':
+      case 'dropdown_text':
+      case 'dropdown_number':
       case 'model_select':
       case 'lora_select':
         return (
@@ -484,12 +518,12 @@ const ComponentLibrary = ({ onAddComponent }) => {
   };
 
   return (
-    <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
-      <div className="p-4 border-b border-gray-200">
+    <div className="w-64 bg-white border-r border-gray-200 flex flex-col h-full">
+      <div className="p-4 border-b border-gray-200 flex-shrink-0">
         <h3 className="text-lg font-medium text-gray-900">组件库</h3>
       </div>
       
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {Object.entries(COMPONENT_TYPES).map(([key, section]) => (
           <div key={key} className="border-b border-gray-100">
             <button
@@ -551,7 +585,7 @@ const PropertiesPanel = ({
   onUpdateComponent, 
   onBindParam 
 }) => {
-  const [activeTab, setActiveTab] = useState('title');
+  const [activeTab, setActiveTab] = useState('properties');
   const [selectedNodeId, setSelectedNodeId] = useState('');
   
   // 获取当前选中的组件
@@ -619,19 +653,114 @@ const PropertiesPanel = ({
 
   const nodeParameters = getNodeParameters(selectedNodeId);
 
+  const handlePropertyChange = (key, value) => {
+    const nextProps = { ...(component.properties || {}), [key]: value };
+    onUpdateComponent(component.id, { properties: nextProps });
+  };
+
+  const renderPropertyField = (field) => {
+    const props = component.properties || {};
+    if (field.type === 'number') {
+      return (
+        <div key={field.key}>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            {field.label}
+          </label>
+          <input
+            type="number"
+            value={props[field.key] ?? field.defaultValue ?? ''}
+            onChange={(e) => handlePropertyChange(field.key, e.target.value === '' ? '' : Number(e.target.value))}
+            placeholder={field.placeholder}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          />
+        </div>
+      );
+    }
+    if (field.type === 'options') {
+      const options = Array.isArray(props[field.key]) ? props[field.key] : [];
+      const updateOption = (index, key, val) => {
+        const nextOptions = [...options];
+        nextOptions[index] = { ...nextOptions[index], [key]: val };
+        handlePropertyChange(field.key, nextOptions);
+      };
+      const addOption = () => {
+        const defaultValue = field.valueType === 'number' ? 0 : '';
+        handlePropertyChange(field.key, [
+          ...options,
+          { label: `选项${options.length + 1}`, value: defaultValue }
+        ]);
+      };
+      const removeOption = (index) => {
+        const nextOptions = options.filter((_, idx) => idx !== index);
+        handlePropertyChange(field.key, nextOptions);
+      };
+      return (
+        <div key={field.key} className="space-y-2">
+          <label className="block text-sm font-medium text-gray-700">
+            {field.label}
+          </label>
+          {options.length === 0 && (
+            <p className="text-xs text-gray-400">暂无选项，请点击下方按钮添加</p>
+          )}
+          <div className="space-y-2">
+            {options.map((opt, idx) => (
+              <div key={`${field.key}-${idx}`} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={opt.label ?? ''}
+                  onChange={(e) => updateOption(idx, 'label', e.target.value)}
+                  className="flex-1 px-2 py-1 border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-sm"
+                  placeholder="显示文本"
+                />
+                <input
+                  type={field.valueType === 'number' ? 'number' : 'text'}
+                  value={opt.value ?? (field.valueType === 'number' ? 0 : '')}
+                  onChange={(e) => {
+                    const val =
+                      field.valueType === 'number'
+                        ? (e.target.value === '' ? '' : Number(e.target.value))
+                        : e.target.value;
+                    updateOption(idx, 'value', val);
+                  }}
+                  className="flex-1 px-2 py-1 border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-sm"
+                  placeholder="提交值"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeOption(idx)}
+                  className="text-gray-400 hover:text-red-500"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={addOption}
+            className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+          >
+            <Plus className="w-4 h-4" />
+            添加选项
+          </button>
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
-    <div className="w-80 bg-white border-l border-gray-200 flex flex-col">
-      <div className="p-4 border-b border-gray-200">
+    <div className="w-80 bg-white border-l border-gray-200 flex flex-col h-full">
+      <div className="p-4 border-b border-gray-200 flex-shrink-0">
         <h3 className="text-lg font-medium text-gray-900">属性面板</h3>
       </div>
       
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {/* 标签页 */}
         <div className="border-b border-gray-200">
           <nav className="flex space-x-8 px-4">
             {[
-              { key: 'title', label: '组件标题' },
-              { key: 'basic', label: '基本属性' },
+              { key: 'properties', label: '属性配置' },
               { key: 'mcp', label: 'MCP属性' }
             ].map(tab => (
               <button
@@ -678,8 +807,8 @@ const PropertiesPanel = ({
             </div>
           )}
 
-          {activeTab === 'title' && (
-            <>
+          {activeTab === 'properties' && (
+            <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   参数名称
@@ -787,11 +916,6 @@ const PropertiesPanel = ({
                   placeholder=""
                 />
               </div>
-            </>
-          )}
-          
-          {activeTab === 'basic' && (
-            <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">组件标签</label>
                 <input
@@ -811,6 +935,14 @@ const PropertiesPanel = ({
                   rows={3}
                 />
               </div>
+
+              {Array.isArray(COMPONENT_PROPERTY_CONFIG[component.type]) &&
+                COMPONENT_PROPERTY_CONFIG[component.type].length > 0 && (
+                  <div className="border border-gray-200 rounded-md p-3 space-y-3">
+                    <div className="text-sm font-medium text-gray-700">扩展属性</div>
+                    {COMPONENT_PROPERTY_CONFIG[component.type].map(renderPropertyField)}
+                  </div>
+                )}
             </div>
           )}
           
@@ -956,6 +1088,8 @@ const VisualCanvasBuilder = ({ onNext, onBack }) => {
       model_select: { options: [{ value: 'model1', label: '模型1' }] },
       lora_select: { options: [{ value: 'lora1', label: 'Lora1' }] },
       dropdown: { options: [{ value: 'option1', label: '选项1' }] },
+      dropdown_text: { options: [{ value: 'option1', label: '选项1' }] },
+      dropdown_number: { options: [{ value: 0, label: '选项1' }] },
       batch_size: { min: 1, max: 10, step: 1 },
     };
     return defaults[type] || {};
@@ -1052,14 +1186,14 @@ const VisualCanvasBuilder = ({ onNext, onBack }) => {
   }
 
   return (
-    <div className="flex h-full bg-gray-50">
+    <div className="flex h-full bg-gray-50 overflow-hidden">
       {/* 左侧组件库 */}
       <ComponentLibrary onAddComponent={addComponent} />
 
       {/* 中间画布区域 */}
       <div 
         ref={canvasRef} 
-        className="flex-1 bg-gray-50 p-6 relative overflow-auto" 
+        className="flex-1 bg-gray-50 p-6 relative overflow-y-auto overflow-x-hidden" 
         onClick={clearSelection}
         onDrop={handleCanvasDrop}
         onDragOver={handleCanvasDragOver}

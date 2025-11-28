@@ -1,7 +1,7 @@
 {
   "name": "ai-canvas-tool",
-  "version": "1.0.0",
-  "description": "AI-powered canvas drawing tool with advanced features",
+  "version": "2.0.0",
+  "description": "AI-powered canvas drawing tool with advanced features and optimized performance",
   "main": "src/main.jsx",
   "type": "module",
   "scripts": {

@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import AppBuilder from './components/AppBuilder';
 import OuzhiArtPlatform from './components/OuzhiArtPlatform';
-import AppRunner from './components/AppRunner'; // 导入 AppRunner
+import AppRunner from './components/AppRunner';
 import ServiceManagerStandalone from './components/ServiceManagerStandalone';
-import { Layout, Package, Palette, Play, Server } from 'lucide-react'; // 导入图标
+import ErrorBoundary from './components/ErrorBoundary';
+import { Layout, Package, Palette, Play, Server } from 'lucide-react';
 
 function AppContent() {
   const navigate = useNavigate();
@@ -151,9 +152,11 @@ function AppContent() {
 
 function App() {
   return (
-    <Router>
-      <AppContent />
-    </Router>
+    <ErrorBoundary>
+      <Router>
+        <AppContent />
+      </Router>
+    </ErrorBoundary>
   );
 }
 
